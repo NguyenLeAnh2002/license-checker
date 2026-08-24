@@ -5,7 +5,7 @@
 
 class DetectionLogger;
 
-// Reports license detection results (machine identity + Windows/Office
+// Reports license detection results (hostname, OS version, Windows/Office
 // license info) to a remote server over HTTP via WinHTTP.
 //
 // Fully self-contained: construction reads an optional config file next to
@@ -33,7 +33,6 @@ private:
 
     static std::string GetExecutableDirectory();
     static bool TryGetJsonString(const std::string& json, const std::string& key, std::string& outValue);
-    static std::string GetMachineGuid();
     static std::string JsonEscape(const std::string& value);
 
     DetectionLogger& logger_;

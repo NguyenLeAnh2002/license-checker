@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- Common Controls v6 so Button/ComboBox/Tab render with the current
+       visual style instead of the classic Win32 theme. -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*" />
+    </dependentAssembly>
+  </dependency>
+
+  <!-- Per-monitor DPI awareness (falls back to system-DPI-aware on Windows
+       versions that don't support v2) so the window isn't bitmap-stretched
+       blurry on high-DPI displays. -->
+  <asmv3:application xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+    <asmv3:windowsSettings
+        xmlns:ws2005="http://schemas.microsoft.com/SMI/2005/WindowsSettings"
+        xmlns:ws2016="http://schemas.microsoft.com/SMI/2016/WindowsSettings">
+      <ws2005:dpiAware>true/pm</ws2005:dpiAware>
+      <ws2016:dpiAwareness>PerMonitorV2</ws2016:dpiAwareness>
+    </asmv3:windowsSettings>
+  </asmv3:application>
+</assembly>

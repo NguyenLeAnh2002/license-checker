@@ -3,8 +3,9 @@
 #include <windows.h>
 #include <string>
 #include <memory>
+#include "../license-detection/LicenseResult.h"
 
-class PipeClient;
+class DetectionWorker;
 
 class MainWindow {
 public:
@@ -20,6 +21,7 @@ private:
     static LRESULT CALLBACK TabProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     void CreateControls();
+    void LayoutBottomControls(int cx, int cy);
     void OnSize(int cx, int cy);
     void OnCommand(WPARAM wParam, LPARAM lParam);
     void OnNotify(LPARAM lParam);
@@ -28,8 +30,10 @@ private:
     void UpdateChromeTexts();
     void UpdateContentLabelsPrefix();
     void UpdateUITexts();
-    void RefreshLicenseData();
+    void OnLicenseResultReady(const LicenseResult& result);
     void CheckNow();
+    void ApplyDwmVisuals();
+    void DrawStatusLabel(DRAWITEMSTRUCT* dis);
 
     HWND m_hwnd;
     HWND m_hTabControl;
@@ -69,5 +73,21 @@ private:
     std::string m_lastWindowsEdition;
     std::string m_lastWindowsKms;
 
-    std::unique_ptr<PipeClient> m_pipeClient;
+    // Cached raw status values used to color the owner-drawn "License Status"
+    // badges in DrawStatusLabel() - kept separate from the label text itself
+    // because that text is localized, while the badge color needs the
+    // original status.
+    int m_windowsLicenseStatusCode;
+    std::string m_officeLicenseStatusRaw;
+
+    // Original SysTabControl32 window procedure, saved when m_hTabControl is
+    // subclassed (via TabProc) to receive WM_DRAWITEM/WM_CTLCOLORSTATIC for
+    // the tab's owner-drawn/child controls.
+    WNDPROC m_origTabWndProc;
+
+    // Cached so OnLanguageChanged() can re-render the currently displayed
+    // result in the new language without triggering a fresh detection.
+    LicenseResult m_lastResult;
+
+    std::unique_ptr<DetectionWorker> m_detectionWorker;
 };

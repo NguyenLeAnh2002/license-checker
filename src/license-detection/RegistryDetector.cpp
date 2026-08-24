@@ -270,7 +270,13 @@ LicenseStatus RegistryDetector::QueryWMISoftwareLicensingProduct(LicenseResult& 
             NULL, EOAC_NONE, NULL
         );
 
-        if (FAILED(hres)) {
+        // CoInitializeSecurity may only be called once per PROCESS (not per
+        // thread/call) - every call after the first one ever made returns
+        // RPC_E_TOO_LATE. That's not a real failure: security is already
+        // configured from the earlier call, so treat it as success instead
+        // of bailing out (which otherwise made every detection after the
+        // first one in the process's lifetime report UnableToDetermine).
+        if (FAILED(hres) && hres != RPC_E_TOO_LATE) {
             std::cout << "[DEBUG]   WMI: Security init failed - " << hres << std::endl;
             CoUninitialize();
             return LicenseStatus::UnableToDetermine;

@@ -1,10 +1,9 @@
 HƯỚNG DẪN SỬ DỤNG
 Phần mềm Kiểm Tra Bản Quyền
 1. Giới thiệu chung
-Sau khi cài đặt, phần mềm chạy ngầm dưới dạng dịch vụ (service) và tự động kiểm tra tình trạng bản quyền Windows, Office mỗi 5 phút một lần, rồi tự gửi báo cáo về hệ thống quản lý trung tâm. Người dùng KHÔNG cần mở ứng dụng hay thao tác gì để việc kiểm tra này diễn ra.
-Ứng dụng “Kiểm Tra Bản Quyền” (LicenseCheckerUI.exe) chỉ dùng để xem lại kết quả kiểm tra gần nhất — mở khi cần xem, không bắt buộc phải để mở liên tục.
+Đây là một ứng dụng duy nhất (LicenseCheckerUI.exe), không cần cài đặt — chỉ cần tải về và chạy trực tiếp. Khi mở ứng dụng, nó tự động kiểm tra ngay tình trạng bản quyền Windows/Office, hiển thị kết quả, và gửi báo cáo về hệ thống quản lý trung tâm; sau đó tự kiểm tra lại mỗi 5 phút MIỄN LÀ ứng dụng vẫn đang mở. Đóng cửa sổ ứng dụng sẽ dừng hẳn việc kiểm tra — muốn kiểm tra lại thì mở ứng dụng lên lần nữa.
 2. Mở ứng dụng
-Chạy file LicenseCheckerUI.exe trong thư mục C:\LicenseChecker (hoặc icon trên Desktop nếu có). Ứng dụng gồm 3 tab: “Bản Quyền Windows”, “Bản Quyền Office” và “Cài Đặt”, cùng một nút “Kiểm Tra Ngay” ở góc trên.
+Chạy trực tiếp file LicenseCheckerUI.exe đã tải về (file agent_config.json đi kèm cần nằm cùng thư mục với file .exe này). Ứng dụng gồm 3 tab: “Bản Quyền Windows”, “Bản Quyền Office” và “Cài Đặt”, cùng một nút “Kiểm Tra Ngay” ở góc trên.
 3. Tab “Bản Quyền Windows”
 Hiển thị thông tin về tình trạng bản quyền của hệ điều hành Windows:
 Trường thông tin
@@ -71,13 +70,13 @@ Tên máy tính trong hệ thống mạng nội bộ
 Mã định danh máy (GUID)
 Mã số duy nhất dùng để nhận diện máy trên hệ thống trung tâm
 Phòng ban
-Đơn vị/phòng ban mà máy được gán vào khi cài đặt
+Đơn vị/phòng ban của máy (hiện chưa xác định tự động)
 Trạng thái dịch vụ
-“Trực tuyến” nghĩa là dịch vụ đang chạy bình thường; “Ngoại tuyến” nghĩa là có sự cố, cần báo CNTT
+“Trực tuyến” nghĩa là lần kiểm tra gần nhất thành công; “Ngoại tuyến” nghĩa là lần kiểm tra gần nhất bị lỗi — thử bấm “Kiểm Tra Ngay”
 Ngôn ngữ
 Đổi ngôn ngữ giao diện giữa Tiếng Việt và English
 6. Nút “Kiểm Tra Ngay”
-Bình thường phần mềm tự kiểm tra mỗi 5 phút, không cần bấm nút này. Chỉ nên dùng nút “Kiểm Tra Ngay” khi bạn vừa xử lý xong một vấn đề bản quyền (ví dụ vừa kích hoạt lại Windows/Office) và muốn xem kết quả cập nhật ngay, không muốn chờ đến chu kỳ kiểm tra tiếp theo.
+Trong lúc ứng dụng đang mở, phần mềm tự kiểm tra mỗi 5 phút, không cần bấm nút này. Chỉ nên dùng nút “Kiểm Tra Ngay” khi bạn vừa xử lý xong một vấn đề bản quyền (ví dụ vừa kích hoạt lại Windows/Office) và muốn xem kết quả cập nhật ngay, không muốn chờ đến chu kỳ kiểm tra tiếp theo.
 7. Câu hỏi thường gặp
 Hỏi: Vì sao Microsoft Word báo “Product Activated” nhưng ứng dụng này lại báo Office “chưa kích hoạt/NOTIFICATIONS”?
 Đáp: Word chỉ hiển thị lại kết quả kiểm tra cũ đã lưu sẵn (cache), không kiểm tra lại mỗi lần mở, kể cả khi khởi động lại máy. Ứng dụng Kiểm Tra Bản Quyền luôn lấy dữ liệu kiểm tra mới nhất, trực tiếp từ hệ điều hành, nên đáng tin cậy hơn. Nếu 2 nơi báo khác nhau, nên tin theo kết quả của ứng dụng này.
@@ -86,7 +85,7 @@ Hỏi: Trạng thái “NOTIFICATIONS” của Office có phải là bị bẻ k
 Hỏi: Máy báo chưa kích hoạt nhưng vẫn mở Word/Excel dùng bình thường, có sao không?
 Đáp: Có thể xảy ra, vì Office bản mới không khóa tính năng ngay lập tức khi chưa kích hoạt. Tuy vậy vẫn nên báo bộ phận CNTT xử lý sớm, vì về lâu dài Office có thể bị giới hạn tính năng hoặc vi phạm quy định sử dụng phần mềm bản quyền của đơn vị.
 Hỏi: Tab “Cài Đặt” báo “Trạng thái dịch vụ: Ngoại tuyến” thì phải làm gì?
-Đáp: Nghĩa là dịch vụ chạy ngầm của phần mềm không hoạt động. Thử khởi động lại máy; nếu vẫn báo Ngoại tuyến, liên hệ bộ phận CNTT để kiểm tra và cài đặt lại.
+Đáp: Nghĩa là lần kiểm tra gần nhất bị lỗi (ví dụ không đọc được thông tin bản quyền). Thử bấm “Kiểm Tra Ngay”; nếu vẫn báo Ngoại tuyến, liên hệ bộ phận CNTT.
 Hỏi: Có cần mở ứng dụng này thường xuyên không?
-Đáp: Không cần. Việc kiểm tra và gửi báo cáo diễn ra tự động ở chế độ nền. Chỉ cần mở ứng dụng khi muốn tự kiểm tra tình trạng máy của mình.
+Đáp: Có. Ứng dụng chỉ kiểm tra và gửi báo cáo khi đang mở — không chạy ngầm dưới dạng dịch vụ nữa. Hãy mở ứng dụng và để nó chạy trong lúc muốn được kiểm tra/theo dõi tình trạng máy của mình; đóng cửa sổ là dừng hẳn việc kiểm tra.
 Mọi thắc mắc khác vui lòng liên hệ bộ phận CNTT để được hỗ trợ.

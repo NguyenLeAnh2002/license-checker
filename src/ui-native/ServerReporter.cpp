@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdio>
+#include <cctype>
 #include <ctime>
 #include <chrono>
 #include <cwchar>
@@ -65,6 +66,69 @@ std::string OfficeStatusToRealString(const std::string& rawOsppStatus) {
         return "NOT_ACTIVATED";
     }
     return "UNKNOWN";
+}
+
+std::string GetLocalHostname() {
+    char buffer[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = sizeof(buffer);
+    if (GetComputerNameA(buffer, &size)) {
+        return std::string(buffer, size);
+    }
+    return "";
+}
+
+// Maps LicenseResult::GetWindowsVersion()'s numeric code (7/8/81/10/11) plus
+// the detected edition into the human-readable "os_version" string the
+// server expects (e.g. "Windows 10 Pro").
+std::string FormatOsVersion(int version, const std::string& edition) {
+    std::string base;
+    switch (version) {
+        case 7:  base = "Windows 7"; break;
+        case 8:  base = "Windows 8"; break;
+        case 81: base = "Windows 8.1"; break;
+        case 10: base = "Windows 10"; break;
+        case 11: base = "Windows 11"; break;
+        default: base = "Windows"; break;
+    }
+    if (!edition.empty()) {
+        base += " " + edition;
+    }
+    return base;
+}
+
+std::string CurrentTimestampUtc() {
+    std::time_t now = std::time(nullptr);
+    std::tm utcTm{};
+    gmtime_s(&utcTm, &now);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utcTm);
+    return std::string(buf);
+}
+
+// Extracts a leading integer from strings like "174 minute(s)" (as reported
+// by `cscript ospp.vbs`). Returns false (leaving outValue untouched) if no
+// digits are found, so callers can distinguish "0" from "not present".
+bool ParseLeadingInt(const std::string& s, int& outValue) {
+    size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) {
+        i++;
+    }
+    bool negative = false;
+    if (i < s.size() && (s[i] == '-' || s[i] == '+')) {
+        negative = (s[i] == '-');
+        i++;
+    }
+    size_t digitsStart = i;
+    long value = 0;
+    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
+        value = value * 10 + (s[i] - '0');
+        i++;
+    }
+    if (i == digitsStart) {
+        return false;
+    }
+    outValue = negative ? -static_cast<int>(value) : static_cast<int>(value);
+    return true;
 }
 
 } // namespace
@@ -163,24 +227,6 @@ ServerReporter::Config ServerReporter::LoadConfig() const {
     return config;
 }
 
-std::string ServerReporter::GetMachineGuid() {
-    HKEY hKey;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ, &hKey) != ERROR_SUCCESS) {
-        return "";
-    }
-
-    char guidBuf[256];
-    DWORD size = sizeof(guidBuf);
-    std::string result;
-    if (RegQueryValueExA(hKey, "MachineGuid", NULL, NULL, (LPBYTE)guidBuf, &size) == ERROR_SUCCESS) {
-        // RegQueryValueEx typically includes the terminating null in `size` for REG_SZ values.
-        size_t len = (size > 0 && guidBuf[size - 1] == '\0') ? size - 1 : size;
-        result.assign(guidBuf, len);
-    }
-    RegCloseKey(hKey);
-    return result;
-}
-
 std::string ServerReporter::JsonEscape(const std::string& value) {
     std::string out;
     out.reserve(value.size());
@@ -204,19 +250,59 @@ std::string ServerReporter::JsonEscape(const std::string& value) {
     return out;
 }
 
-// Payload shape confirmed against the BE team's real server - see the
-// vocabulary comment on LicenseStatusToRealString()/OfficeStatusToRealString()
-// above for what's confirmed vs. best-effort.
+// Payload shape matches the controller's POST /api/report handler
+// (internal/httpserver/public.go / internal/model/license_status.go in the
+// license_checker_server repo) - see AGENT_SERVER_PROTOCOL_REAL.md. "ip" is
+// left blank intentionally: the server falls back to the request's source
+// IP, which is also what it uses to match a machine's own results back to
+// it on the landing page, so a self-reported IP would risk a mismatch.
 std::string ServerReporter::BuildPayload(const LicenseResult& result) const {
-    std::string machineGuid = GetMachineGuid();
+    const auto& windowsInfo = result.GetWindowsLicenseInfo();
     const auto& officeInfo = result.GetOfficeLicenseInfo();
+
+    std::string hostname = GetLocalHostname();
+    std::string osVersion = FormatOsVersion(result.GetWindowsVersion(), result.GetWindowsEdition());
+    std::string checkTime = CurrentTimestampUtc();
+    bool hasKmsServer = !result.GetWindowsKmsServer().empty();
+
+    std::ostringstream windowsJson;
+    windowsJson << "{"
+        << "\"name\":\"" << JsonEscape(windowsInfo.name) << "\","
+        << "\"product_name\":\"" << JsonEscape(result.GetWindowsEdition()) << "\","
+        << "\"description\":\"" << JsonEscape(windowsInfo.description) << "\","
+        << "\"license_status\":\"" << LicenseStatusToRealString(result.GetLicenseStatus()) << "\","
+        << "\"partial_key\":\"" << JsonEscape(windowsInfo.partialProductKey) << "\","
+        << "\"kms\":" << (hasKmsServer ? "true" : "false") << ","
+        << "\"kms_server\":\"" << JsonEscape(result.GetWindowsKmsServer()) << "\","
+        << "\"check_time\":\"" << checkTime << "\""
+        << "}";
+
+    std::ostringstream officeJson;
+    officeJson << "{"
+        << "\"license_status\":\"" << OfficeStatusToRealString(officeInfo.licenseStatus) << "\","
+        << "\"product_name\":\"" << JsonEscape(officeInfo.licenseName) << "\","
+        << "\"partial_key\":\"" << JsonEscape(officeInfo.partialProductKey) << "\","
+        << "\"kms_server\":\"" << JsonEscape(officeInfo.kmsServer) << "\",";
+
+    int timeLeft = 0;
+    ParseLeadingInt(officeInfo.remainingGrace, timeLeft);
+    officeJson << "\"time_left\":" << timeLeft << ",";
+
+    int renewInterval = 0;
+    if (ParseLeadingInt(officeInfo.renewalInterval, renewInterval)) {
+        officeJson << "\"renew_interval\":" << renewInterval << ",";
+    }
+    officeJson << "\"check_time\":\"" << checkTime << "\""
+        << "}";
 
     std::ostringstream json;
     json << "{"
-         << "\"machineGuid\":\"" << JsonEscape(machineGuid) << "\","
-         << "\"windowsStatus\":\"" << LicenseStatusToRealString(result.GetLicenseStatus()) << "\","
-         << "\"officeStatus\":\"" << OfficeStatusToRealString(officeInfo.licenseStatus) << "\""
-         << "}";
+        << "\"hostname\":\"" << JsonEscape(hostname) << "\","
+        << "\"ip\":\"\","
+        << "\"os_version\":\"" << JsonEscape(osVersion) << "\","
+        << "\"windows_license\":" << windowsJson.str() << ","
+        << "\"office_license\":" << officeJson.str()
+        << "}";
     return json.str();
 }
 
@@ -245,9 +331,9 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
     if (!path.empty() && path.back() == L'/') {
         path.pop_back();
     }
-    path += L"/api/agent/report-license";
+    path += L"/api/report";
 
-    HINTERNET hSession = WinHttpOpen(L"LicenseCheckerAgent/1.0",
+    HINTERNET hSession = WinHttpOpen(L"LicenseCheckerUI/1.0",
         WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
         outError = "WinHttpOpen failed (error " + std::to_string(GetLastError()) + ")";
@@ -282,13 +368,17 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
         return false;
     }
 
-    std::wstring contentTypeHeader = L"Content-Type: application/json";
+    std::wstring contentTypeHeader = L"Content-Type: application/json; charset=utf-8";
     WinHttpAddRequestHeaders(hRequest, contentTypeHeader.c_str(), (DWORD)-1,
         WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
 
-    std::wstring apiKeyHeader = L"X-Api-Key: " + Utf8ToWide(config_.apiKey);
-    WinHttpAddRequestHeaders(hRequest, apiKeyHeader.c_str(), (DWORD)-1,
-        WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    // The controller's /api/report endpoint doesn't check this header, but
+    // send it when configured in case a future server revision starts to.
+    if (!config_.apiKey.empty()) {
+        std::wstring apiKeyHeader = L"X-Api-Key: " + Utf8ToWide(config_.apiKey);
+        WinHttpAddRequestHeaders(hRequest, apiKeyHeader.c_str(), (DWORD)-1,
+            WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    }
 
     // Log the exact outgoing request (method, full URL, headers, body) so
     // it can be compared directly against a known-working curl/PowerShell
@@ -307,7 +397,8 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
         fullUrl << pathStr;
 
         logger_.LogInfo("ServerReporter: sending POST " + fullUrl.str());
-        logger_.LogInfo("ServerReporter: headers - Content-Type: application/json | X-Api-Key: " + config_.apiKey);
+        logger_.LogInfo("ServerReporter: headers - Content-Type: application/json; charset=utf-8" +
+            (config_.apiKey.empty() ? "" : (" | X-Api-Key: " + config_.apiKey)));
         logger_.LogInfo("ServerReporter: body - " + jsonBody);
     }
 
