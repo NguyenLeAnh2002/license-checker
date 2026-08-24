@@ -1,5 +1,10 @@
 # License Checker - Build & Run Guide (Windows 7 SP1+)
 
+> ⚠️ **OUTDATED.** This describes the old Qt5 + CMake build (`src/ui`,
+> `src/agent`, `src/common`), which no longer exist in this repository -
+> following it will fail immediately. The current build needs no Qt at
+> all: see [BUILD_VS2022.md](BUILD_VS2022.md) and run `build-msbuild.bat`.
+
 ## Prerequisites
 
 ### 1. **Visual Studio 2019 or 2022** (with C++ support)

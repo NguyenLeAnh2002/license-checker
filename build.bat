@@ -1,4 +1,11 @@
 @echo off
+REM ============================================================
+REM OUTDATED: this builds the old Qt-based UI + CMake project
+REM (src/ui, src/agent, src/common), which no longer exist in
+REM this repository - this script will fail immediately.
+REM Current build: run build-msbuild.bat instead (no Qt needed).
+REM See BUILD_VS2022.md.
+REM ============================================================
 REM License Checker - Automated Build Script for Windows 7+
 REM This script builds the entire License Checker project
 

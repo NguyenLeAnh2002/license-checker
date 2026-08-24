@@ -1,5 +1,10 @@
 # Quick Build Reference
 
+> ⚠️ **OUTDATED.** Everything below describes the old Qt5-based build
+> (`src/ui`, `src/agent`, `src/common`), which no longer exist in this
+> repository - none of it will work. The current build needs no Qt at
+> all: see [BUILD_VS2022.md](BUILD_VS2022.md) and run `build-msbuild.bat`.
+
 ## MinGW + Qt5 (Windows 7+ Compatible) ✅
 
 ### One-liner Build:

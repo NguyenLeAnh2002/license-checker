@@ -1,6 +1,6 @@
 # License Checker
 
-A Windows desktop application for monitoring Windows and Office license status with system tray integration. Supports **Windows 7 SP1 and newer**.
+A Windows desktop application for monitoring Windows and Office license status. Supports **Windows 7 SP1 and newer**.
 
 ## Features
 
@@ -13,16 +13,18 @@ A Windows desktop application for monitoring Windows and Office license status w
 
 ✅ **User Interface**
 - Tabbed interface: Windows License, Office License, Settings
-- Color-coded status badges (Green/Red/Yellow/Gray)
-- System information display
-- System tray integration with quick-status popup
-- Minimize to tray functionality
+- Color-coded status badges
+- Vietnamese/English language switcher (defaults to Vietnamese)
+- System/host information display (hostname, machine GUID, department)
 
 ✅ **Architecture**
-- Service/Agent runs in background (Windows Service)
-- UI application displays license data
-- Named Pipe IPC (inter-process communication) for real-time updates
-- Registry fallback for data persistence
+- Single native Win32 application - no background service, no IPC
+- Detection runs on a worker thread inside the same process as the UI
+- Self-reports results to a controller server (see
+  `AGENT_SERVER_PROTOCOL_REAL.md`) - the controller address comes from a
+  trailer block stamped into the built exe (see
+  `license_checker_server/internal/checkerstamp` in the sibling repo) or an
+  optional `agent_config.json` next to the executable
 
 ✅ **Cross-Platform License Detection**
 - SL API (Windows Service) → highest priority
@@ -31,61 +33,38 @@ A Windows desktop application for monitoring Windows and Office license status w
 
 ## Quick Start
 
-### Option 1: MinGW/Qt5 (Recommended for Windows 7)
-
-**Install Dependencies:**
-- Qt5.15 LTS with MinGW 8.1 (download: https://www.qt.io/download-open-source)
-
-**Build (easiest):**
-```bash
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-build-mingw.bat
-```
-
-**Or PowerShell:**
-```powershell
-.\build-mingw.ps1 -Qt5Path "C:\Qt\5.15.0\mingw81_64"
-```
-
-**Or manual:**
-```bash
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-set PATH=%Qt5_DIR%\bin;%PATH%
-mkdir build && cd build
-qmake -r -spec win32-g++ ..\LicenseChecker.pro
-mingw32-make -j4
-```
-
-See [BUILD_MINGW.md](BUILD_MINGW.md) for detailed instructions.
-
-### Option 2: CMake + MSVC (Visual Studio)
-
-**Install Dependencies:**
-- Visual Studio 2019/2022 (with C++ support)
-- CMake 3.24+
-- Qt5.15 LTS
+**Prerequisites:** Visual Studio 2022 (or standalone "Build Tools for
+Visual Studio 2022") with the "Desktop development with C++" workload,
+plus the individual component "MSVC v142 - VS 2019 C++ x64/x86 build
+tools". **No Qt, no CMake, no qmake needed** - everything this project
+links against ships with the Windows SDK that workload installs.
 
 **Build:**
 ```bash
-set Qt5_DIR=C:\Qt\5.15.0\msvc2019_64
-build.bat
+build-msbuild.bat
 ```
-
-See [BUILD_GUIDE.md](BUILD_GUIDE.md) for detailed instructions.
-
-### 3. Run
-
-**UI Application (standalone):**
+or manually:
 ```bash
-build\src\ui\Release\LicenseCheckerUI.exe
+MSBuild LicenseChecker.sln /p:Configuration=Release /p:Platform=x64
 ```
 
-**Install as Windows Service:**
+See [BUILD_VS2022.md](BUILD_VS2022.md) for detailed instructions,
+prerequisites, and troubleshooting.
+
+**Run:**
 ```bash
-# Run as Administrator
-build\src\agent\Release\LicenseCheckerAgent.exe /install
-net start LicenseCheckerAgent
+x64\Release\LicenseCheckerUI.exe
 ```
+It's a standalone GUI app - just run it directly, there's nothing to
+install or start as a service.
+
+> Other build docs/scripts in this repo (`LicenseChecker.pro`,
+> `CMakeLists.txt`, `build.bat`, `build-mingw.bat`/`.ps1`,
+> `BUILD_GUIDE.md`, `BUILD_MINGW.md`, `QUICK_BUILD.md`) describe an older
+> Qt-based UI + separate Windows-service agent architecture that has since
+> been replaced by the single native app described here, and no longer
+> match this repository's source tree - they're marked outdated in place
+> and kept only for history.
 
 ## Architecture
 
@@ -93,147 +72,64 @@ net start LicenseCheckerAgent
 
 ```
 src/
-├── license-detection/    # Core license detection logic
-│   ├── LicenseDetector.cpp      - Main detector orchestrator
-│   ├── SLAPIDetector.cpp        - Windows SL API detection
-│   ├── WMIDetector.cpp          - WMI-based detection
-│   ├── RegistryDetector.cpp     - Registry-based detection
-│   └── LicenseResult.cpp        - Data structure for results
+├── license-detection/    # Core license detection logic (static library)
+│   ├── LicenseDetector.cpp        - Main detector orchestrator
+│   ├── SLAPIDetector.cpp          - Windows SL API detection
+│   ├── WMIDetector.cpp            - WMI-based detection
+│   ├── RegistryDetector.cpp       - Registry-based detection
+│   ├── WindowsSLMgrDetector.cpp   - slmgr.vbs-based detection
+│   ├── OfficeOSPPDetector.cpp     - Office (ospp.vbs) detection
+│   ├── DetectionLogger.cpp        - File logging
+│   └── LicenseResult.cpp          - Data structure for results
 │
-├── agent/               # Background service
-│   ├── LicenseDetectionWorker.cpp   - Periodic detection worker
-│   ├── ServiceMain.cpp              - Service entry point
-│   └── ServiceInstaller.cpp         - Service install/uninstall
-│
-├── ui/                  # Desktop application
-│   ├── MainWindow.cpp       - Main tabbed interface
-│   ├── SystemTrayIcon.cpp   - System tray integration
-│   ├── LicenseDataModel.cpp - Data model for UI
-│   └── main.cpp            - Application entry point
-│
-└── common/              # Shared utilities
-    ├── NamedPipeServer.cpp  - Service-side IPC
-    ├── NamedPipeClient.cpp  - UI-side IPC
-    └── SharedLicenseDataWriter.cpp - Registry writer
+└── ui-native/            # The application itself (single .exe)
+    ├── main.cpp              - WinMain entry point
+    ├── MainWindow.cpp        - Tabbed Win32 window, all UI controls
+    ├── DetectionWorker.cpp   - Background thread running the detection loop
+    ├── ServerReporter.cpp    - Reports results to the controller over WinHTTP
+    ├── Localization.cpp      - Vietnamese/English strings
+    └── StartupLog.cpp        - Minimal startup/crash log
 ```
 
-### Communication Flow
+### Data Flow
 
 ```
-Service (Background)                UI (Foreground)
-│                                   │
-├─ Detect License                   │
-│  (SL API → WMI → Registry)        │
-│                                   │
-├─ NamedPipeServer                  ├─ NamedPipeClient
-│  Listen on: \\.\pipe\LicenseChecker
-│                                   │
-│                   ◄───── GetLicenseData ─────┤
-│                                   │
-│ Send JSON Response ────────────────►
-│ {status, data{windows, office}}    │
-│                                   │
-│                   ◄─ RequestImmediateCheck ──┤
-│                                   │
-├─ Queue immediate detection        │
-│  (Run Detect cycle again)          │
-│                                   │
+DetectionWorker thread                    MainWindow (UI thread)
+│                                          │
+├─ Detect License                         │
+│  (SL API → WMI → Registry)              │
+│                                          │
+├─ ResultCallback ─────────────────────────►  update tabs/badges
+│                                          │
+├─ ServerReporter::SendReport() ──HTTP──►  controller (license_checker_server)
+│  POST /api/report
 ```
+
+There is no named-pipe IPC and no separate service process - detection,
+UI, and reporting all live in one `LicenseCheckerUI.exe`.
 
 ## File Structure
 
 ```
-License-checker/
-├── CMakeLists.txt              # Root CMake configuration
-├── BUILD_GUIDE.md              # Detailed build instructions
-├── build.bat                   # Batch build script
-├── build.ps1                   # PowerShell build script
-├── README.md                   # This file
+license-checker/
+├── LicenseChecker.sln            # Visual Studio solution (the real build)
+├── BUILD_VS2022.md               # Current build instructions
+├── build-msbuild.bat             # Build script (MSBuild, no Qt)
+├── AGENT_SERVER_PROTOCOL_REAL.md # Wire protocol with the controller
+├── README.md                     # This file
 │
 ├── src/
-│   ├── CMakeLists.txt
-│   ├── ui/
-│   │   ├── CMakeLists.txt
-│   │   ├── MainWindow.h/cpp
-│   │   ├── SystemTrayIcon.h/cpp
-│   │   ├── LicenseDataModel.h/cpp
-│   │   └── main.cpp
-│   │
-│   ├── agent/
-│   │   ├── CMakeLists.txt
-│   │   ├── LicenseDetectionWorker.h/cpp
-│   │   ├── ServiceMain.cpp
-│   │   └── ServiceInstaller.cpp
-│   │
 │   ├── license-detection/
-│   │   ├── CMakeLists.txt
-│   │   ├── LicenseDetector.h/cpp
-│   │   ├── SLAPIDetector.h/cpp
-│   │   ├── WMIDetector.h/cpp
-│   │   ├── RegistryDetector.h/cpp
-│   │   ├── LicenseResult.h/cpp
-│   │   ├── LicenseStatusEnum.h
-│   │   └── DetectionLogger.h/cpp
+│   │   ├── LicenseDetection.vcxproj
+│   │   └── ... (see Architecture above)
 │   │
-│   └── common/
-│       ├── CMakeLists.txt
-│       ├── NamedPipeServer.h/cpp
-│       ├── NamedPipeClient.h/cpp
-│       └── SharedLicenseDataWriter.h/cpp
+│   └── ui-native/
+│       ├── LicenseCheckerUI.vcxproj
+│       └── ... (see Architecture above)
 │
-└── build/                      # Build output (after building)
-    └── src/
-        ├── ui/Release/LicenseCheckerUI.exe
-        └── agent/Release/LicenseCheckerAgent.exe
-```
-
-## Data Format
-
-### License Status Enum
-```
-0 = Legitimate
-1 = Cracked
-2 = Not Licensed
-3 = Unable to Determine
-```
-
-### KMS Status Enum
-```
-0 = Not KMS
-1 = KMS Detected
-2 = KMS Not Found
-3 = Error
-```
-
-### IPC Message Format
-
-**Request (UI → Service):**
-```
-GetLicenseData
-RequestImmediateCheck
-```
-
-**Response (Service → UI):**
-```json
-{
-  "status": "success",
-  "data": {
-    "windows": {
-      "edition": "Windows 10 Pro",
-      "licenseStatus": 0,
-      "kmsStatus": 1,
-      "kmsServer": "kms.corp.local",
-      "lastDetected": "2026-08-06T11:05:00Z"
-    },
-    "office": {
-      "edition": "Office 365 ProPlus",
-      "licenseStatus": 0,
-      "kmsStatus": 1,
-      "kmsServer": "kms.corp.local",
-      "lastDetected": "2026-08-06T11:05:00Z"
-    }
-  }
-}
+└── x64/                           # Build output (after building)
+    └── Release/
+        └── LicenseCheckerUI.exe
 ```
 
 ## System Requirements
@@ -241,24 +137,26 @@ RequestImmediateCheck
 - **OS:** Windows 7 SP1 or newer
 - **RAM:** 256 MB minimum
 - **Disk:** 50 MB minimum
-- **Privileges:** Administrator (for service installation only)
+- **Privileges:** Administrator recommended (SL API/WMI detection is more complete when elevated)
 
 ## Troubleshooting
 
 ### UI won't start
-- Ensure Qt5 runtime libraries are available
+- Check `x64\Release\license_checker_startup.log` and `license-detection.log` next to the exe
 - Check Windows Event Viewer for errors
-- Verify Named Pipe connection (Service must be running)
 
-### Service won't install
-- Run installer as Administrator
-- Check Windows Event Viewer → Application logs
-- Ensure no other instance is running
-
-### License detection fails
-- Run as Administrator (required for SL API and WMI)
-- Check Windows Event Viewer for service logs
+### License detection fails / incomplete
+- Run as Administrator (required for full SL API and WMI access)
+- Check `license-detection.log` next to the exe
 - Verify Windows is not in trial period
+
+### Not reporting to the controller
+- Check `license-detection.log` for `ServerReporter:` lines - it logs
+  whether it found an embedded address, an `agent_config.json`, or neither
+- See `AGENT_SERVER_PROTOCOL_REAL.md` and the sibling `license_checker_server`
+  repo's `internal/checkerstamp` package for how the controller address gets
+  embedded into the exe - and that repo's `docs/checker-stamp-and-signing.md`
+  for why re-stamping doesn't break this exe's Authenticode signature
 
 ## License
 
@@ -266,4 +164,5 @@ This project is provided as-is for enterprise license compliance monitoring.
 
 ## Support
 
-See `BUILD_GUIDE.md` for detailed build and deployment instructions.
+See [BUILD_VS2022.md](BUILD_VS2022.md) for build instructions and
+`AGENT_SERVER_PROTOCOL_REAL.md` for the reporting protocol.

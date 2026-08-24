@@ -69,33 +69,81 @@ std::string OfficeStatusToRealString(const std::string& rawOsppStatus) {
     return "UNKNOWN";
 }
 
-// Reserved block that license_checker_server (see internal/checkerstamp in
-// that repo) overwrites in place when it hosts this binary for download,
-// embedding its own address so this agent needs no companion config file
-// and no input from whoever runs it. Bracketed by two fixed marker strings
-// so the patcher can find the block reliably and verify it hasn't drifted;
-// the payload starts out all-zero ("not stamped yet"). Layout, marker text,
-// and payload size are a fixed contract with that repo - if any of these
-// change, the two must change together.
-struct EmbeddedServerConfig {
-    char beginMarker[16];
-    char serverUrl[500];
-    char endMarker[16];
-};
+// Reserved trailer that license_checker_server (see internal/checkerstamp
+// and scripts/AppendTrailer.ps1 in that repo) overwrites in place when it
+// hosts this binary for download, embedding its own address so this agent
+// needs no companion config file and no input from whoever runs it.
+//
+// This is deliberately NOT a compile-time struct anymore: this binary gets
+// Authenticode-signed once, with no config block at all, and a one-time
+// post-sign packaging step (AppendTrailer.ps1) appends this 536-byte block
+// after the signature and grows the certificate table's declared size to
+// cover it. That keeps the block entirely outside the region the
+// Authenticode digest covers, so the controller can rewrite the payload in
+// place indefinitely without ever invalidating the signature - a struct
+// living inside the compiled .rdata section would sit inside the hashed
+// region and break the signature on the very first re-stamp. The 536-byte
+// size is load-bearing (must stay a multiple of 8 - see AppendTrailer.ps1);
+// don't change it without re-running that verification.
+//
+// Because the block isn't part of the compiled image, it can't be read as
+// an in-memory struct - ReadEmbeddedServerUrl() below re-opens this
+// process's own .exe file on disk and reads the trailing bytes directly.
+// Layout, marker text, and payload size are a fixed contract with that
+// repo - if any of these change, the two must change together.
+const char kBeginMarker[] = "LCCFG_BEGIN_V1";
+const char kEndMarker[]   = "LCCFG_END_V1";
+constexpr size_t kMarkerSize  = 16;
+constexpr size_t kPayloadSize = 504;
+constexpr size_t kBlockSize   = kMarkerSize + kPayloadSize + kMarkerSize;  // 536
 
-const EmbeddedServerConfig g_embeddedServerConfig = {
-    "LCCFG_BEGIN_V1",
-    {0},
-    "LCCFG_END_V1",
-};
+bool MatchesPaddedMarker(const char* data, const char* marker) {
+    char padded[kMarkerSize] = {0};
+    strncpy(padded, marker, kMarkerSize);
+    return memcmp(data, padded, kMarkerSize) == 0;
+}
 
-// Copies the embedded payload into a bounded local buffer before treating it
-// as a C string, so a stamp that (incorrectly) omits the NUL terminator
-// can't read past the field.
+// Opens this binary's own .exe file on disk (not the in-memory image,
+// which never contains this trailer) and reads the server URL from the
+// block appended after it was signed. Returns "" if the trailer is
+// missing, corrupted, or on any I/O error - identical to the "not stamped
+// yet" case, so LoadConfig() falls back the same way either way.
+//
+// Opening the very file this process is currently executing from is safe
+// on Windows: the loader holds only a FILE_SHARE_READ image section, not
+// an exclusive handle, so a plain read-only open alongside it works.
 std::string ReadEmbeddedServerUrl() {
-    char buf[sizeof(g_embeddedServerConfig.serverUrl) + 1];
-    memcpy(buf, g_embeddedServerConfig.serverUrl, sizeof(g_embeddedServerConfig.serverUrl));
-    buf[sizeof(g_embeddedServerConfig.serverUrl)] = '\0';
+    char pathBuf[MAX_PATH];
+    DWORD pathLen = GetModuleFileNameA(NULL, pathBuf, MAX_PATH);
+    if (pathLen == 0 || pathLen == MAX_PATH) {
+        return "";
+    }
+
+    std::ifstream file(std::string(pathBuf, pathLen), std::ios::binary | std::ios::ate);
+    if (!file.is_open()) {
+        return "";
+    }
+    std::streamoff fileSize = file.tellg();
+    if (fileSize < static_cast<std::streamoff>(kBlockSize)) {
+        return "";
+    }
+
+    file.seekg(fileSize - static_cast<std::streamoff>(kBlockSize));
+    char block[kBlockSize];
+    if (!file.read(block, kBlockSize)) {
+        return "";
+    }
+
+    if (!MatchesPaddedMarker(block, kBeginMarker)) {
+        return "";
+    }
+    if (!MatchesPaddedMarker(block + kMarkerSize + kPayloadSize, kEndMarker)) {
+        return "";
+    }
+
+    char buf[kPayloadSize + 1];
+    memcpy(buf, block + kMarkerSize, kPayloadSize);
+    buf[kPayloadSize] = '\0';
     return std::string(buf);
 }
 

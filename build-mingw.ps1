@@ -1,3 +1,10 @@
+# ============================================================
+# OUTDATED: this builds the old Qt-based UI (src/ui, src/agent,
+# src/common via LicenseChecker.pro), which no longer exist in
+# this repository - this script will fail immediately.
+# Current build: run build-msbuild.bat instead (no Qt needed).
+# See BUILD_VS2022.md.
+# ============================================================
 # License Checker - PowerShell Build Script for MinGW/Qt5
 
 param(

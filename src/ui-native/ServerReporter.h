@@ -8,10 +8,12 @@ class DetectionLogger;
 // Reports license detection results (hostname, OS version, Windows/Office
 // license info) to a remote server over HTTP via WinHTTP.
 //
-// Fully self-contained: construction reads an optional config file next to
-// the running executable, and SendReport() never throws - all config/WinHTTP
-// failures are caught internally and logged, so it's always safe for the
-// caller to invoke unconditionally once per detection cycle.
+// Fully self-contained: construction reads the server address from a
+// trailer block appended to this binary's own .exe file after it was
+// signed (see ServerReporter.cpp), an optional config file next to the
+// running executable, or both - and SendReport() never throws - all
+// config/WinHTTP failures are caught internally and logged, so it's always
+// safe for the caller to invoke unconditionally once per detection cycle.
 class ServerReporter {
 public:
     explicit ServerReporter(DetectionLogger& logger);

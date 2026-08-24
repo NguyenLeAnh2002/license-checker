@@ -1,3 +1,7 @@
+# OUTDATED: requires Qt5 and points at src/common, src/agent, src/ui, none
+# of which exist in this repository anymore (replaced by src/ui-native, a
+# single native app with no Qt dependency). This will fail immediately.
+# Current build: LicenseChecker.sln via build-msbuild.bat - see BUILD_VS2022.md.
 cmake_minimum_required(VERSION 3.24)
 
 project(LicenseChecker)
