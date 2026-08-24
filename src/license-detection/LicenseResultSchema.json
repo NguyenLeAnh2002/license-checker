@@ -1,0 +1,115 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "License Detection Result",
+  "description": "Result of Windows and Office license detection",
+  "type": "object",
+  "version": "1.0",
+  "required": [
+    "version",
+    "licenseStatus",
+    "timestamp",
+    "windowsVersion",
+    "windowsEdition",
+    "kmsStatus",
+    "windowsKmsServer",
+    "officeKmsServer",
+    "isError",
+    "errorMessage"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "default": "1.0"
+    },
+    "licenseStatus": {
+      "type": "string",
+      "description": "Windows license status",
+      "enum": [
+        "Legitimate",
+        "Cracked",
+        "NotLicensed",
+        "UnableToDetermine"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when detection was performed"
+    },
+    "windowsVersion": {
+      "type": "integer",
+      "description": "Windows version (7, 8, 81, 10, 11, or Server YYYY)",
+      "minimum": 0
+    },
+    "windowsEdition": {
+      "type": "string",
+      "description": "Windows edition (Pro, Enterprise, Home, etc.)"
+    },
+    "kmsStatus": {
+      "type": "string",
+      "description": "KMS (Key Management Service) activation status",
+      "enum": [
+        "NotKMS",
+        "KMSDetected",
+        "KMSNotFound",
+        "Error"
+      ]
+    },
+    "windowsKmsServer": {
+      "type": "string",
+      "description": "KMS server address for Windows (if KMS-activated)"
+    },
+    "officeKmsServer": {
+      "type": "string",
+      "description": "KMS server address for Office (if KMS-activated)"
+    },
+    "isError": {
+      "type": "boolean",
+      "description": "Whether an error occurred during detection"
+    },
+    "errorMessage": {
+      "type": "string",
+      "description": "Error message if detection failed"
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "version": "1.0",
+      "licenseStatus": "Legitimate",
+      "timestamp": "2026-08-06T14:30:45",
+      "windowsVersion": 10,
+      "windowsEdition": "Pro",
+      "kmsStatus": "NotKMS",
+      "windowsKmsServer": "",
+      "officeKmsServer": "",
+      "isError": false,
+      "errorMessage": ""
+    },
+    {
+      "version": "1.0",
+      "licenseStatus": "Legitimate",
+      "timestamp": "2026-08-06T14:31:00",
+      "windowsVersion": 11,
+      "windowsEdition": "Enterprise",
+      "kmsStatus": "KMSDetected",
+      "windowsKmsServer": "kms.example.com",
+      "officeKmsServer": "office-kms.example.com",
+      "isError": false,
+      "errorMessage": ""
+    },
+    {
+      "version": "1.0",
+      "licenseStatus": "UnableToDetermine",
+      "timestamp": "2026-08-06T14:32:00",
+      "windowsVersion": 0,
+      "windowsEdition": "Unknown",
+      "kmsStatus": "Error",
+      "windowsKmsServer": "",
+      "officeKmsServer": "",
+      "isError": true,
+      "errorMessage": "Detection failed: Registry access denied"
+    }
+  ]
+}

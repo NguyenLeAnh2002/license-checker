@@ -1,0 +1,59 @@
+# === Server & Qt UI (excluded per user request) ===
+server/
+src/ui/
+UIOnly.pro
+build-ui-only.bat
+AGENT_UI_DESIGN.html
+PLAN_ARTIFACT.html
+PLAN_SIMPLE.html
+
+# === IDE & Editor ===
+.vs/
+.vscode/
+*.swp
+*.swo
+*.user
+*.VC.db
+
+# === Build Output ===
+x64/
+src/*/x64/
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+*.a
+*.o
+build/
+dist/
+
+# === Python ===
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+venv/
+.venv/
+
+# === Logs & Temp ===
+*.log
+*.tmp
+*.bak
+
+# === Database ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === System ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Generated/Test Output ===
+coverage/
+.coverage
+test-results/

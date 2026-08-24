@@ -1,0 +1,92 @@
+HƯỚNG DẪN SỬ DỤNG
+Phần mềm Kiểm Tra Bản Quyền
+1. Giới thiệu chung
+Sau khi cài đặt, phần mềm chạy ngầm dưới dạng dịch vụ (service) và tự động kiểm tra tình trạng bản quyền Windows, Office mỗi 5 phút một lần, rồi tự gửi báo cáo về hệ thống quản lý trung tâm. Người dùng KHÔNG cần mở ứng dụng hay thao tác gì để việc kiểm tra này diễn ra.
+Ứng dụng “Kiểm Tra Bản Quyền” (LicenseCheckerUI.exe) chỉ dùng để xem lại kết quả kiểm tra gần nhất — mở khi cần xem, không bắt buộc phải để mở liên tục.
+2. Mở ứng dụng
+Chạy file LicenseCheckerUI.exe trong thư mục C:\LicenseChecker (hoặc icon trên Desktop nếu có). Ứng dụng gồm 3 tab: “Bản Quyền Windows”, “Bản Quyền Office” và “Cài Đặt”, cùng một nút “Kiểm Tra Ngay” ở góc trên.
+3. Tab “Bản Quyền Windows”
+Hiển thị thông tin về tình trạng bản quyền của hệ điều hành Windows:
+Trường thông tin
+Ý nghĩa
+Tên
+Tên sản phẩm Windows đang cài (ví dụ: Windows 10 Pro)
+Phiên bản
+Phiên bản/edition cụ thể của Windows
+Mô tả
+Mô tả chi tiết về loại giấy phép (OEM, Volume, Retail...)
+Trạng thái bản quyền
+Kết quả kiểm tra — xem bảng ý nghĩa bên dưới
+Khóa sản phẩm
+5 ký tự cuối của product key đang dùng
+Trạng thái KMS
+Máy có được kích hoạt qua máy chủ KMS nội bộ hay không
+Máy chủ KMS
+Địa chỉ máy chủ KMS mà máy đang dùng để kích hoạt (nếu có)
+Lần phát hiện cuối
+Thời điểm kiểm tra gần nhất
+Ý nghĩa các trạng thái bản quyền Windows
+Trạng thái hiển thị
+Ý nghĩa
+Hợp lệ (chính hãng)
+Windows đã kích hoạt thành công, hợp lệ. Không cần làm gì thêm.
+Chưa có bản quyền
+Windows chưa được kích hoạt (có thể đang trong thời gian dùng thử/chờ kích hoạt). Cần báo bộ phận CNTT xử lý.
+Bị bẻ khóa (lậu)
+Windows tự phát hiện license không hợp lệ/bị can thiệp (crack). Cần báo bộ phận CNTT xử lý ngay.
+Không xác định được
+Phần mềm không đọc được thông tin bản quyền (có thể do lỗi hệ thống, quyền truy cập). Thử bấm “Kiểm Tra Ngay”; nếu vẫn vậy, báo CNTT.
+4. Tab “Bản Quyền Office”
+Hiển thị thông tin về tình trạng bản quyền Microsoft Office. Nếu máy không cài Office, tab này sẽ để trống.
+Trường thông tin
+Ý nghĩa
+Trạng thái / Trạng thái bản quyền
+Kết quả kiểm tra bản quyền Office — xem bảng ý nghĩa bên dưới
+Tên bản quyền
+Tên phiên bản Office và loại giấy phép (ví dụ: Office 16 ProPlus VL KMS Client)
+Khóa sản phẩm
+5 ký tự cuối của product key Office đang dùng
+Máy chủ KMS
+Địa chỉ máy chủ KMS dùng để kích hoạt Office
+Thời gian ân hạn
+Số ngày còn lại trong thời gian ân hạn (nếu có); để trống nghĩa là đã hết ân hạn
+Chu kỳ kích hoạt
+Khoảng thời gian Office tự động thử kích hoạt lại (mặc định 120 phút)
+Ý nghĩa các trạng thái bản quyền Office thường gặp
+Trạng thái
+Ý nghĩa
+LICENSED
+Đã kích hoạt hợp lệ, không có vấn đề gì.
+OOB_GRACE / OOT_GRACE / EXTENDED_GRACE
+Đang trong thời gian ân hạn (grace period) — Office chưa kích hoạt xong nhưng vẫn còn thời gian chờ, chưa cần lo lắng ngay.
+NOTIFICATIONS
+Đã hết thời gian ân hạn mà chưa kích hoạt được (thường do máy không liên hệ được máy chủ KMS). KHÔNG phải là phần mềm giả/crack — chỉ là chưa kích hoạt xong. Cần báo CNTT kiểm tra kết nối mạng tới máy chủ KMS.
+NON_GENUINE_GRACE / NON_GENUINE...
+Office phát hiện dấu hiệu license không chính hãng (nghi crack). Cần báo CNTT xử lý ngay.
+5. Tab “Cài Đặt”
+Trường thông tin
+Ý nghĩa
+Tên máy
+Tên máy tính trong hệ thống mạng nội bộ
+Mã định danh máy (GUID)
+Mã số duy nhất dùng để nhận diện máy trên hệ thống trung tâm
+Phòng ban
+Đơn vị/phòng ban mà máy được gán vào khi cài đặt
+Trạng thái dịch vụ
+“Trực tuyến” nghĩa là dịch vụ đang chạy bình thường; “Ngoại tuyến” nghĩa là có sự cố, cần báo CNTT
+Ngôn ngữ
+Đổi ngôn ngữ giao diện giữa Tiếng Việt và English
+6. Nút “Kiểm Tra Ngay”
+Bình thường phần mềm tự kiểm tra mỗi 5 phút, không cần bấm nút này. Chỉ nên dùng nút “Kiểm Tra Ngay” khi bạn vừa xử lý xong một vấn đề bản quyền (ví dụ vừa kích hoạt lại Windows/Office) và muốn xem kết quả cập nhật ngay, không muốn chờ đến chu kỳ kiểm tra tiếp theo.
+7. Câu hỏi thường gặp
+Hỏi: Vì sao Microsoft Word báo “Product Activated” nhưng ứng dụng này lại báo Office “chưa kích hoạt/NOTIFICATIONS”?
+Đáp: Word chỉ hiển thị lại kết quả kiểm tra cũ đã lưu sẵn (cache), không kiểm tra lại mỗi lần mở, kể cả khi khởi động lại máy. Ứng dụng Kiểm Tra Bản Quyền luôn lấy dữ liệu kiểm tra mới nhất, trực tiếp từ hệ điều hành, nên đáng tin cậy hơn. Nếu 2 nơi báo khác nhau, nên tin theo kết quả của ứng dụng này.
+Hỏi: Trạng thái “NOTIFICATIONS” của Office có phải là bị bẻ khóa (crack) không?
+Đáp: Không. “NOTIFICATIONS” chỉ có nghĩa là đã hết thời gian ân hạn mà chưa kích hoạt được (thường do không liên hệ được máy chủ KMS), khác hoàn toàn với trạng thái bị crack/không chính hãng.
+Hỏi: Máy báo chưa kích hoạt nhưng vẫn mở Word/Excel dùng bình thường, có sao không?
+Đáp: Có thể xảy ra, vì Office bản mới không khóa tính năng ngay lập tức khi chưa kích hoạt. Tuy vậy vẫn nên báo bộ phận CNTT xử lý sớm, vì về lâu dài Office có thể bị giới hạn tính năng hoặc vi phạm quy định sử dụng phần mềm bản quyền của đơn vị.
+Hỏi: Tab “Cài Đặt” báo “Trạng thái dịch vụ: Ngoại tuyến” thì phải làm gì?
+Đáp: Nghĩa là dịch vụ chạy ngầm của phần mềm không hoạt động. Thử khởi động lại máy; nếu vẫn báo Ngoại tuyến, liên hệ bộ phận CNTT để kiểm tra và cài đặt lại.
+Hỏi: Có cần mở ứng dụng này thường xuyên không?
+Đáp: Không cần. Việc kiểm tra và gửi báo cáo diễn ra tự động ở chế độ nền. Chỉ cần mở ứng dụng khi muốn tự kiểm tra tình trạng máy của mình.
+Mọi thắc mắc khác vui lòng liên hệ bộ phận CNTT để được hỗ trợ.

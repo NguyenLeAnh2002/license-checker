@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "server_url": "http://10.1.65.100:8000",
+  "api_key": "demo-key-12345",
+  "department": "Default"
+}

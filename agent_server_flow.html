@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent-Server Communication Flow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 40px;
+            font-size: 28px;
+        }
+
+        .flow-section {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+
+        .flow-diagram {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .flow-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            min-width: 180px;
+            text-align: center;
+            font-weight: 500;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .flow-box.agent {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+
+        .flow-box.server {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+
+        .flow-box.database {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: #333;
+        }
+
+        .arrow {
+            font-size: 24px;
+            color: #3498db;
+            flex-grow: 1;
+            text-align: center;
+            min-width: 50px;
+        }
+
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .step-number {
+            display: inline-block;
+            background: #3498db;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            margin-right: 10px;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .step-content {
+            display: inline-block;
+        }
+
+        .code-block {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            margin: 10px 0;
+        }
+
+        .field-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        .field-table th,
+        .field-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .field-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .field-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 12px;
+            font-weight: 600;
+            margin: 2px;
+        }
+
+        .badge-request {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .badge-response {
+            background: #f3e5f5;
+            color: #7b1fa2;
+        }
+
+        .badge-success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .badge-error {
+            background: #ffebee;
+            color: #c62828;
+        }
+
+        .timeline {
+            position: relative;
+            padding: 20px 0;
+        }
+
+        .timeline-item {
+            margin-bottom: 30px;
+            position: relative;
+            padding-left: 40px;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 0;
+            width: 20px;
+            height: 20px;
+            background: #3498db;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 0 2px #3498db;
+        }
+
+        .timeline-item::after {
+            content: '';
+            position: absolute;
+            left: 19px;
+            top: 20px;
+            width: 2px;
+            height: 30px;
+            background: #bdc3c7;
+        }
+
+        .timeline-item:last-child::after {
+            display: none;
+        }
+
+        .timeline-content {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+        }
+
+        .timeline-time {
+            font-size: 12px;
+            color: #7f8c8d;
+            margin-bottom: 5px;
+        }
+
+        .timeline-title {
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 5px;
+        }
+
+        .timeline-desc {
+            color: #555;
+            font-size: 14px;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+        }
+
+        .info-box.warning {
+            background: #fff3e0;
+            border-left-color: #ff9800;
+        }
+
+        .info-box.success {
+            background: #e8f5e9;
+            border-left-color: #4caf50;
+        }
+
+        .json-example {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            margin: 10px 0;
+        }
+
+        .json-key {
+            color: #3498db;
+        }
+
+        .json-string {
+            color: #2ecc71;
+        }
+
+        .json-number {
+            color: #e74c3c;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .comparison-item {
+            padding: 15px;
+            border-radius: 4px;
+            background: #f8f9fa;
+        }
+
+        .comparison-item h4 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+
+        .comparison-item ul {
+            margin-left: 20px;
+            color: #555;
+            font-size: 14px;
+        }
+
+        .comparison-item li {
+            margin: 5px 0;
+        }
+
+        @media (max-width: 768px) {
+            .flow-diagram {
+                flex-direction: column;
+            }
+
+            .arrow {
+                transform: rotate(90deg);
+                margin: 10px 0;
+            }
+
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+
+            .flow-box {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔄 Agent-Server Communication Architecture</h1>
+
+        <!-- Overview Section -->
+        <div class="flow-section">
+            <h2>📊 System Overview</h2>
+            <div class="flow-diagram">
+                <div class="flow-box agent">
+                    💻 Agent<br>(C++ Windows)
+                </div>
+                <div class="arrow">→ HTTP POST ←</div>
+                <div class="flow-box server">
+                    🌐 Server<br>(Python FastAPI)
+                </div>
+                <div class="arrow">→ SQL ←</div>
+                <div class="flow-box database">
+                    💾 Database<br>(SQLite)
+                </div>
+            </div>
+            <div class="info-box">
+                <strong>Communication Protocol:</strong> HTTP/HTTPS with JSON payload. Agent sends license detection results every 5 minutes to server endpoint.
+            </div>
+        </div>
+
+        <!-- Workflow Section -->
+        <div class="flow-section">
+            <h2>🔄 5-Minute Detection Cycle</h2>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+0s</div>
+                        <div class="timeline-title">🎯 Trigger Detection</div>
+                        <div class="timeline-desc">Background worker wakes up every 5 minutes</div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+1-3s</div>
+                        <div class="timeline-title">🔍 Detect License</div>
+                        <div class="timeline-desc">
+                            Tier 1: SL APIs → Tier 2: WMI → Tier 3: Registry<br>
+                            Result: LicenseStatus enum + metadata
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+3-4s</div>
+                        <div class="timeline-title">📝 Prepare Report</div>
+                        <div class="timeline-desc">
+                            Collect machine info (hostname, OS version)<br>
+                            Serialize to JSON with timestamp
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+4-5s</div>
+                        <div class="timeline-title">📤 Send to Server</div>
+                        <div class="timeline-desc">
+                            HTTP POST /api/agent/report-license<br>
+                            Retry max 3 times if fails
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+5s</div>
+                        <div class="timeline-title">✅ Server Receives</div>
+                        <div class="timeline-desc">
+                            Validate API key<br>
+                            Parse JSON<br>
+                            Update database
+                        </div>
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-content">
+                        <div class="timeline-time">T+5.1s</div>
+                        <div class="timeline-title">🎉 Done</div>
+                        <div class="timeline-desc">
+                            Response: 200 OK<br>
+                            Dashboard refreshes within 30 seconds
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- HTTP Request Section -->
+        <div class="flow-section">
+            <h2>📡 HTTP Request Details</h2>
+
+            <div class="step">
+                <span class="step-number">1</span>
+                <span class="step-content">
+                    <strong>Endpoint:</strong> <code>POST /api/agent/report-license</code>
+                </span>
+            </div>
+
+            <div class="step">
+                <span class="step-number">2</span>
+                <span class="step-content">
+                    <strong>Authentication:</strong> <code>X-API-Key: {api-key-from-dashboard}</code>
+                </span>
+            </div>
+
+            <div class="step">
+                <span class="step-number">3</span>
+                <span class="step-content">
+                    <strong>Content Type:</strong> <code>application/json</code>
+                </span>
+            </div>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Request Example:</h3>
+            <div class="code-block">
+POST /api/agent/report-license HTTP/1.1
+Host: server-ip:8000
+X-API-Key: agent-key-12345
+Content-Type: application/json
+Content-Length: 256
+
+{
+  "hostname": "DESKTOP-ABC123",
+  "department": "Finance",
+  "os_version": 10,
+  "os_edition": "Pro",
+  "licenseStatus": "Legitimate",
+  "windowsEdition": "Pro",
+  "kmsStatus": "KMSDetected",
+  "windowsKmsServer": "kms.corp.local",
+  "timestamp": "2026-08-06T19:00:00Z"
+}</div>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Response Example (200 OK):</h3>
+            <div class="code-block">
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "status": "received",
+  "machine_id": 42,
+  "timestamp": "2026-08-06T19:00:00Z"
+}</div>
+        </div>
+
+        <!-- JSON Payload Section -->
+        <div class="flow-section">
+            <h2>📝 JSON Payload Structure</h2>
+
+            <table class="field-table">
+                <thead>
+                    <tr>
+                        <th>Field</th>
+                        <th>Type</th>
+                        <th>Example</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>hostname</strong></td>
+                        <td>string</td>
+                        <td>"DESKTOP-ABC123"</td>
+                        <td>Machine name from GetComputerName()</td>
+                    </tr>
+                    <tr>
+                        <td><strong>department</strong></td>
+                        <td>string</td>
+                        <td>"Finance"</td>
+                        <td>Department/organizational unit</td>
+                    </tr>
+                    <tr>
+                        <td><strong>os_version</strong></td>
+                        <td>integer</td>
+                        <td>10</td>
+                        <td>7, 8, 10, 11, or 2008, 2012, 2016, 2019, 2022</td>
+                    </tr>
+                    <tr>
+                        <td><strong>os_edition</strong></td>
+                        <td>string</td>
+                        <td>"Pro"</td>
+                        <td>Pro, Enterprise, Home, Server edition</td>
+                    </tr>
+                    <tr>
+                        <td><strong>licenseStatus</strong></td>
+                        <td>enum</td>
+                        <td>"Legitimate"</td>
+                        <td>Legitimate | Cracked | NotLicensed | UnableToDetermine</td>
+                    </tr>
+                    <tr>
+                        <td><strong>windowsEdition</strong></td>
+                        <td>string</td>
+                        <td>"Pro"</td>
+                        <td>Windows edition name</td>
+                    </tr>
+                    <tr>
+                        <td><strong>kmsStatus</strong></td>
+                        <td>enum</td>
+                        <td>"KMSDetected"</td>
+                        <td>NotKMS | KMSDetected | KMSNotFound | Error</td>
+                    </tr>
+                    <tr>
+                        <td><strong>windowsKmsServer</strong></td>
+                        <td>string</td>
+                        <td>"kms.corp.local"</td>
+                        <td>KMS server hostname/IP (if using KMS)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>officeStatus</strong></td>
+                        <td>enum</td>
+                        <td>"Legitimate"</td>
+                        <td>Office license status (optional)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>officeKmsServer</strong></td>
+                        <td>string</td>
+                        <td>"kms.corp.local"</td>
+                        <td>Office KMS server (if different)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>isError</strong></td>
+                        <td>boolean</td>
+                        <td>false</td>
+                        <td>true if detection encountered error</td>
+                    </tr>
+                    <tr>
+                        <td><strong>errorMessage</strong></td>
+                        <td>string</td>
+                        <td>"API unavailable"</td>
+                        <td>Error details (if isError = true)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>timestamp</strong></td>
+                        <td>string</td>
+                        <td>"2026-08-06T19:00:00Z"</td>
+                        <td>ISO 8601 detection timestamp</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Machine Identification Section -->
+        <div class="flow-section">
+            <h2>🖥️ Machine Identification</h2>
+
+            <div class="info-box">
+                <strong>How Server Identifies Machines:</strong><br>
+                Server uses <strong>hostname</strong> as unique identifier. If hostname matches existing machine → update. Otherwise → create new record.
+            </div>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Getting Machine Info (C++):</h3>
+            <div class="code-block">
+// Get hostname
+char hostname[MAX_COMPUTERNAME_LENGTH + 1];
+DWORD size = sizeof(hostname);
+GetComputerNameA(hostname, &size);
+
+// Get Windows version
+DWORD version = GetWindowsVersion();  // Returns 7, 8, 10, 11
+
+// Get Windows edition
+std::string edition = GetWindowsEdition();  // "Pro", "Enterprise"
+
+// Get KMS server (from registry)
+std::string kmsServer = GetKMSServer();  // "kms.corp.local"
+            </div>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Server-side Processing:</h3>
+            <div class="code-block">
+1. Receive JSON with hostname="DESKTOP-ABC123"
+2. Query: SELECT * FROM machines WHERE hostname='DESKTOP-ABC123'
+3. If found → UPDATE licenses table with new status
+4. If not found → INSERT new machine, then INSERT license
+5. Archive old license to license_history
+6. Return machine_id in response
+            </div>
+        </div>
+
+        <!-- Authentication Section -->
+        <div class="flow-section">
+            <h2>🔐 Authentication (API Keys)</h2>
+
+            <div class="info-box success">
+                <strong>How to Generate API Key:</strong><br>
+                1. Open Dashboard: http://localhost:8000/dashboard<br>
+                2. Login: admin / admin123<br>
+                3. Settings tab → "Generate New Key"<br>
+                4. Copy key and deploy to agent machines
+            </div>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Using API Key in Request:</h3>
+            <div class="code-block">
+// curl example
+curl -X POST http://server:8000/api/agent/report-license \
+  -H "X-API-Key: YOUR-KEY-HERE" \
+  -H "Content-Type: application/json" \
+  -d '{...}'
+
+// C++ example
+curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+headers = curl_slist_append(headers, "X-API-Key: YOUR-KEY-HERE");
+            </div>
+
+            <div class="comparison">
+                <div class="comparison-item">
+                    <h4>✅ Valid Request</h4>
+                    <ul>
+                        <li>X-API-Key header present</li>
+                        <li>Key matches active key in dashboard</li>
+                        <li>Valid JSON in body</li>
+                        <li>Response: 200 OK</li>
+                    </ul>
+                </div>
+                <div class="comparison-item">
+                    <h4>❌ Invalid Request</h4>
+                    <ul>
+                        <li>No X-API-Key header</li>
+                        <li>Key is inactive/revoked</li>
+                        <li>Invalid JSON format</li>
+                        <li>Response: 401 Unauthorized</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Handling Section -->
+        <div class="flow-section">
+            <h2>⚠️ Error Handling & Retry Logic</h2>
+
+            <table class="field-table">
+                <thead>
+                    <tr>
+                        <th>Status Code</th>
+                        <th>Meaning</th>
+                        <th>Agent Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-success">200</span></td>
+                        <td>OK - Report received</td>
+                        <td>✅ Success, log and continue</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-error">400</span></td>
+                        <td>Bad Request</td>
+                        <td>❌ Invalid JSON, don't retry</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-error">401</span></td>
+                        <td>Unauthorized</td>
+                        <td>❌ Invalid API key, don't retry</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-error">500</span></td>
+                        <td>Server Error</td>
+                        <td>⏳ Retry (max 3 times with delay)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-error">Timeout</span></td>
+                        <td>Network timeout</td>
+                        <td>⏳ Retry (max 3 times with delay)</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3 style="margin-top: 20px; color: #2c3e50;">Retry Strategy:</h3>
+            <div class="code-block">
+Max Retries: 3
+Retry Delay: 60 seconds
+
+Attempt 1: Send report → Success? Return
+Attempt 2: Wait 60s → Send report → Success? Return
+Attempt 3: Wait 60s → Send report → Success? Return
+Failed: Log error, wait until next 5-minute cycle
+            </div>
+
+            <div class="info-box warning">
+                <strong>Important:</strong> Only retry on network/server errors (5xx, timeouts). Do NOT retry on 400/401 errors.
+            </div>
+        </div>
+
+        <!-- Dashboard Verification Section -->
+        <div class="flow-section">
+            <h2>📊 Verifying Reports in Dashboard</h2>
+
+            <div class="step">
+                <span class="step-number">1</span>
+                <span class="step-content">
+                    <strong>Machines Tab:</strong> View all machines that have reported. Shows hostname, OS, license status, last check-in time.
+                </span>
+            </div>
+
+            <div class="step">
+                <span class="step-number">2</span>
+                <span class="step-content">
+                    <strong>Violations Tab:</strong> See cracked/unlicensed machines with action required alerts.
+                </span>
+            </div>
+
+            <div class="step">
+                <span class="step-number">3</span>
+                <span class="step-content">
+                    <strong>Departments Tab:</strong> View compliance by department. Shows machines per department and compliance rate.
+                </span>
+            </div>
+
+            <div class="step">
+                <span class="step-number">4</span>
+                <span class="step-content">
+                    <strong>Settings Tab:</strong> View audit log. Shows all API calls and actions for compliance tracking.
+                </span>
+            </div>
+
+            <div class="info-box">
+                <strong>Real-time Refresh:</strong> Dashboard refreshes every 30 seconds. Changes appear almost immediately after agent sends report.
+            </div>
+        </div>
+
+        <!-- Configuration Section -->
+        <div class="flow-section">
+            <h2>⚙️ Agent Configuration</h2>
+
+            <h3 style="color: #2c3e50;">File: config.json</h3>
+            <div class="code-block">
+{
+  "server": {
+    "url": "http://your-server-ip:8000",
+    "api_key": "from-dashboard",
+    "timeout_seconds": 30
+  },
+  "agent": {
+    "report_interval_minutes": 5,
+    "machine_info": {
+      "hostname": "auto",
+      "department": "Default"
+    },
+    "retry": {
+      "max_attempts": 3,
+      "delay_seconds": 60
+    }
+  }
+}
+            </div>
+
+            <div class="comparison">
+                <div class="comparison-item">
+                    <h4>Development Setup</h4>
+                    <ul>
+                        <li>URL: http://localhost:8000</li>
+                        <li>API Key: demo-key-12345</li>
+                        <li>SSL Verify: false</li>
+                        <li>Timeout: 30 seconds</li>
+                    </ul>
+                </div>
+                <div class="comparison-item">
+                    <h4>Production Setup</h4>
+                    <ul>
+                        <li>URL: https://server-fqdn</li>
+                        <li>API Key: Generated per department</li>
+                        <li>SSL Verify: true</li>
+                        <li>Certificate: Proper CA chain</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <!-- Troubleshooting Section -->
+        <div class="flow-section">
+            <h2>🔧 Troubleshooting</h2>
+
+            <h3 style="color: #2c3e50;">❓ Server not receiving reports</h3>
+            <div class="info-box warning">
+                Check:<br>
+                1. Server running? → curl http://localhost:8000/api/health<br>
+                2. API key correct? → Compare dashboard key with agent config<br>
+                3. Network connectivity? → ping server from agent machine<br>
+                4. Firewall? → Allow port 8000<br>
+                5. Agent logs? → Check C:\Program Files\LicenseChecker\license-detection.log
+            </div>
+
+            <h3 style="color: #2c3e50;">❓ Dashboard shows no machines</h3>
+            <div class="info-box warning">
+                Check:<br>
+                1. Agent sending reports? → Check agent logs<br>
+                2. Server receiving? → Check server logs (watch FastAPI output)<br>
+                3. Database? → sqlite3 license_checker.db "SELECT COUNT(*) FROM machines;"<br>
+                4. Refresh? → Press F5 on dashboard, check browser cache
+            </div>
+
+            <h3 style="color: #2c3e50;">❓ 401 Unauthorized errors</h3>
+            <div class="info-box warning">
+                Check:<br>
+                1. API key in config? → Should match X-API-Key header<br>
+                2. Key active in dashboard? → Check Settings tab<br>
+                3. Key format? → No spaces or special characters<br>
+                4. Header format? → X-API-Key: key-value (not Bearer token)
+            </div>
+        </div>
+
+        <!-- Summary Section -->
+        <div class="flow-section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+            <h2 style="color: white; border-bottom-color: rgba(255,255,255,0.3);">📌 Quick Summary</h2>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 20px;">
+                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 4px;">
+                    <strong>Every 5 Minutes</strong><br>
+                    Agent detects license status
+                </div>
+                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 4px;">
+                    <strong>HTTP POST</strong><br>
+                    Send JSON to server with API key
+                </div>
+                <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 4px;">
+                    <strong>Instant Update</strong><br>
+                    Dashboard shows data in real-time
+                </div>
+            </div>
+
+            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 4px; margin-top: 20px;">
+                <strong>Communication Protocol:</strong><br>
+                Agent → (JSON via HTTP POST) → Server → (SQL UPDATE) → Database → (API GET) → Dashboard
+            </div>
+        </div>
+    </div>
+</body>
+</html>
