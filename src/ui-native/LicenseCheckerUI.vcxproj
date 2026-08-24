@@ -78,6 +78,7 @@
     <ClInclude Include="Localization.h" />
     <ClInclude Include="DetectionWorker.h" />
     <ClInclude Include="ServerReporter.h" />
+    <ClInclude Include="StartupLog.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
 
@@ -87,6 +88,7 @@
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="DetectionWorker.cpp" />
     <ClCompile Include="ServerReporter.cpp" />
+    <ClCompile Include="StartupLog.cpp" />
   </ItemGroup>
 
   <ItemGroup>

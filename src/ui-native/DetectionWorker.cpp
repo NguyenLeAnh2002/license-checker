@@ -1,8 +1,33 @@
 #include "DetectionWorker.h"
+#include <windows.h>
+
+namespace {
+
+// std::ofstream("license-detection.log") resolves relative to the process's
+// current working directory, which isn't always the executable's own folder
+// (e.g. launched via a shortcut with a different "Start in", or a scheduled
+// task) - some machines in the field were ending up with the log somewhere
+// other than next to the exe, making it useless for diagnosing why they
+// weren't reporting. Anchor it to the exe's actual directory instead.
+std::string GetLogFilePath() {
+    char pathBuf[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, pathBuf, MAX_PATH);
+    if (len == 0 || len == MAX_PATH) {
+        return "license-detection.log";  // Fall back to the old CWD-relative behavior.
+    }
+    std::string path(pathBuf, len);
+    size_t pos = path.find_last_of("\\/");
+    if (pos == std::string::npos) {
+        return "license-detection.log";
+    }
+    return path.substr(0, pos) + "\\license-detection.log";
+}
+
+} // namespace
 
 DetectionWorker::DetectionWorker(std::chrono::seconds interval, ResultCallback onResult)
     : detector_(std::make_unique<LicenseDetector>()),
-      logger_(std::make_unique<DetectionLogger>("license-detection.log")),
+      logger_(std::make_unique<DetectionLogger>(GetLogFilePath())),
       reporter_(std::make_unique<ServerReporter>(*logger_)),
       onResult_(std::move(onResult)),
       interval_(interval),

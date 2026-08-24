@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <cstdio>
+#include <cstring>
 #include <cctype>
 #include <ctime>
 #include <chrono>
@@ -66,6 +67,53 @@ std::string OfficeStatusToRealString(const std::string& rawOsppStatus) {
         return "NOT_ACTIVATED";
     }
     return "UNKNOWN";
+}
+
+// Reserved block that license_checker_server (see internal/checkerstamp in
+// that repo) overwrites in place when it hosts this binary for download,
+// embedding its own address so this agent needs no companion config file
+// and no input from whoever runs it. Bracketed by two fixed marker strings
+// so the patcher can find the block reliably and verify it hasn't drifted;
+// the payload starts out all-zero ("not stamped yet"). Layout, marker text,
+// and payload size are a fixed contract with that repo - if any of these
+// change, the two must change together.
+struct EmbeddedServerConfig {
+    char beginMarker[16];
+    char serverUrl[500];
+    char endMarker[16];
+};
+
+const EmbeddedServerConfig g_embeddedServerConfig = {
+    "LCCFG_BEGIN_V1",
+    {0},
+    "LCCFG_END_V1",
+};
+
+// Copies the embedded payload into a bounded local buffer before treating it
+// as a C string, so a stamp that (incorrectly) omits the NUL terminator
+// can't read past the field.
+std::string ReadEmbeddedServerUrl() {
+    char buf[sizeof(g_embeddedServerConfig.serverUrl) + 1];
+    memcpy(buf, g_embeddedServerConfig.serverUrl, sizeof(g_embeddedServerConfig.serverUrl));
+    buf[sizeof(g_embeddedServerConfig.serverUrl)] = '\0';
+    return std::string(buf);
+}
+
+// Translates the handful of WinHTTP error codes actually seen in the field
+// (see winhttp.h for the full list) so the log is self-explanatory without
+// needing to look the number up. Falls back to just the raw code for
+// anything not covered here.
+std::string DescribeWinHttpError(DWORD code) {
+    switch (code) {
+        case ERROR_WINHTTP_TIMEOUT:              return "timeout";
+        case ERROR_WINHTTP_NAME_NOT_RESOLVED:    return "name not resolved (thường do proxy WinHTTP cấu hình sai - xem 'netsh winhttp show proxy', không phải do DNS/mạng của địa chỉ đích)";
+        case ERROR_WINHTTP_CANNOT_CONNECT:       return "cannot connect (máy chủ từ chối kết nối / sai cổng / firewall chặn)";
+        case ERROR_WINHTTP_CONNECTION_ERROR:     return "connection error (kết nối bị reset giữa chừng)";
+        case ERROR_WINHTTP_SECURE_FAILURE:       return "TLS/SSL handshake failed";
+        case ERROR_WINHTTP_INVALID_URL:          return "invalid server_url";
+        case ERROR_WINHTTP_UNRECOGNIZED_SCHEME:  return "server_url thiếu hoặc sai scheme (phải là http:// hoặc https://)";
+        default:                                 return "unknown WinHTTP error";
+    }
 }
 
 std::string GetLocalHostname() {
@@ -139,7 +187,7 @@ ServerReporter::ServerReporter(DetectionLogger& logger)
     if (config_.enabled) {
         logger_.LogInfo("ServerReporter: reporting enabled, server=" + config_.serverUrl);
     } else {
-        logger_.LogInfo("ServerReporter: reporting disabled (no agent_config.json with a usable server_url/api_key next to the executable)");
+        logger_.LogInfo("ServerReporter: reporting disabled (no server address embedded in this binary and no agent_config.json next to the executable)");
     }
 }
 
@@ -189,41 +237,62 @@ bool ServerReporter::TryGetJsonString(const std::string& json, const std::string
 ServerReporter::Config ServerReporter::LoadConfig() const {
     Config config;
 
+    // Primary path: an address stamped directly into this binary by
+    // license_checker_server at upload time (see EmbeddedServerConfig
+    // above) - needs no companion file and no input from whoever runs it.
+    std::string embeddedUrl = ReadEmbeddedServerUrl();
+    if (!embeddedUrl.empty()) {
+        logger_.LogInfo("ServerReporter: found embedded server address: " + embeddedUrl);
+        config.serverUrl = embeddedUrl;
+        config.enabled = true;
+    } else {
+        logger_.LogInfo("ServerReporter: no embedded server address in this binary (unstamped build, or this download predates that feature)");
+    }
+
+    // agent_config.json next to the executable, if present, is an optional
+    // manual override on top of the embedded address - lets a companion
+    // file still set/replace the api_key, or replace server_url entirely
+    // for manual/dev setups that predate stamping.
     std::string dir = GetExecutableDirectory();
     if (dir.empty()) {
+        logger_.LogInfo("ServerReporter: GetModuleFileNameA failed (error " + std::to_string(GetLastError()) + ") - cannot locate agent_config.json");
         return config;
     }
     std::string configPath = dir + "\\agent_config.json";
 
     std::ifstream file(configPath, std::ios::binary);
     if (!file.is_open()) {
-        return config;  // No config file - reporting stays disabled.
+        logger_.LogInfo("ServerReporter: no agent_config.json at " + configPath + " (fine if an address is already embedded above)");
+        return config;
     }
 
     std::ostringstream buffer;
     buffer << file.rdbuf();
     std::string content = buffer.str();
+    logger_.LogInfo("ServerReporter: found agent_config.json at " + configPath + " (" + std::to_string(content.size()) + " bytes)");
 
-    // No separate "enabled" flag: reporting is on whenever a usable
-    // destination + credential are present below. Accept both this
-    // project's mock-server config schema (server_url/api_key) and the
-    // real BE server's default config field names (serverUrl/X-Api-Key),
-    // since installs get configs generated by either.
+    // Accept both this project's mock-server config schema (server_url/
+    // api_key) and the real BE server's default config field names
+    // (serverUrl/X-Api-Key), since installs get configs generated by either.
     std::string serverUrl;
-    if ((!TryGetJsonString(content, "server_url", serverUrl) || serverUrl.empty()) &&
-        (!TryGetJsonString(content, "serverUrl", serverUrl) || serverUrl.empty())) {
-        return config;  // Can't report without a destination.
+    if (((TryGetJsonString(content, "server_url", serverUrl) && !serverUrl.empty()) ||
+         (TryGetJsonString(content, "serverUrl", serverUrl) && !serverUrl.empty()))) {
+        logger_.LogInfo("ServerReporter: agent_config.json overrides server address: " + serverUrl);
+        config.serverUrl = serverUrl;
+        config.enabled = true;
+    } else if (!config.enabled) {
+        logger_.LogInfo("ServerReporter: agent_config.json has no server_url/serverUrl field, and no embedded address either - reporting stays disabled");
+        return config;
     }
-    config.serverUrl = serverUrl;
 
     std::string apiKey;
-    if ((!TryGetJsonString(content, "api_key", apiKey) || apiKey.empty()) &&
-        (!TryGetJsonString(content, "X-Api-Key", apiKey) || apiKey.empty())) {
-        TryGetJsonString(content, "apiKey", apiKey);
+    if ((TryGetJsonString(content, "api_key", apiKey) && !apiKey.empty()) ||
+        (TryGetJsonString(content, "X-Api-Key", apiKey) && !apiKey.empty()) ||
+        TryGetJsonString(content, "apiKey", apiKey)) {
+        config.apiKey = apiKey;
+        logger_.LogInfo("ServerReporter: agent_config.json provides an api_key (" + std::to_string(apiKey.size()) + " chars)");
     }
-    config.apiKey = apiKey;
 
-    config.enabled = true;
     return config;
 }
 
@@ -320,7 +389,8 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
 
     std::wstring wideUrl = Utf8ToWide(config_.serverUrl);
     if (!WinHttpCrackUrl(wideUrl.c_str(), (DWORD)wideUrl.size(), 0, &urlComp)) {
-        outError = "Failed to parse server_url (error " + std::to_string(GetLastError()) + ")";
+        DWORD err = GetLastError();
+        outError = "Failed to parse server_url (error " + std::to_string(err) + " - " + DescribeWinHttpError(err) + ")";
         return false;
     }
 
@@ -333,10 +403,21 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
     }
     path += L"/api/report";
 
+    // The controller is always a LAN address (see AGENT_SERVER_PROTOCOL_REAL.md/
+    // the mobile-controller design), never something that should go through a
+    // corporate web proxy. WINHTTP_ACCESS_TYPE_DEFAULT_PROXY uses the
+    // machine-wide WinHTTP proxy setting (netsh winhttp show proxy) - separate
+    // from whatever the browser uses - and on machines where that's configured,
+    // WinHTTP tries to resolve the *proxy's* hostname before ever reaching the
+    // target, failing with ERROR_WINHTTP_NAME_NOT_RESOLVED (12007) even though
+    // the LAN target itself is perfectly reachable (ping/browser work fine,
+    // since neither of those goes through this proxy setting). Force a direct
+    // connection instead.
     HINTERNET hSession = WinHttpOpen(L"LicenseCheckerUI/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
-        outError = "WinHttpOpen failed (error " + std::to_string(GetLastError()) + ")";
+        DWORD err = GetLastError();
+        outError = "WinHttpOpen failed (error " + std::to_string(err) + " - " + DescribeWinHttpError(err) + ")";
         return false;
     }
 
@@ -353,7 +434,8 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
 
     HINTERNET hConnect = WinHttpConnect(hSession, hostBuf, port, 0);
     if (!hConnect) {
-        outError = "WinHttpConnect failed (error " + std::to_string(GetLastError()) + ")";
+        DWORD err = GetLastError();
+        outError = "WinHttpConnect failed (error " + std::to_string(err) + " - " + DescribeWinHttpError(err) + ")";
         WinHttpCloseHandle(hSession);
         return false;
     }
@@ -362,7 +444,8 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path.c_str(),
         NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
     if (!hRequest) {
-        outError = "WinHttpOpenRequest failed (error " + std::to_string(GetLastError()) + ")";
+        DWORD err = GetLastError();
+        outError = "WinHttpOpenRequest failed (error " + std::to_string(err) + " - " + DescribeWinHttpError(err) + ")";
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return false;
@@ -434,7 +517,8 @@ bool ServerReporter::HttpPost(const std::string& jsonBody, std::string& outError
                 (body.empty() ? "" : (" - " + body));
         }
     } else {
-        outError = "send/receive failed (error " + std::to_string(GetLastError()) + ")";
+        DWORD err = GetLastError();
+        outError = "send/receive failed (error " + std::to_string(err) + " - " + DescribeWinHttpError(err) + ")";
     }
 
     WinHttpCloseHandle(hRequest);
@@ -451,12 +535,30 @@ void ServerReporter::SendReport(const LicenseResult& result) {
 
     try {
         std::string payload = BuildPayload(result);
+
+        // Field testing found some machines' first attempt in a run succeeds,
+        // but a retry moments later against the exact same address fails with
+        // the identical WinHTTP error, then later succeeds again - consistent
+        // with a transient local resolver/network-security-software hiccup
+        // rather than a hard, consistent block (which would fail every time).
+        // A couple of quick retries absorb that instead of losing the whole
+        // cycle's report and having to wait for the next scheduled one.
+        const int maxAttempts = 3;
+        const DWORD retryDelayMs = 2000;
         std::string error;
-        if (HttpPost(payload, error)) {
-            logger_.LogInfo("ServerReporter: report sent successfully to " + config_.serverUrl);
-        } else {
-            logger_.LogFailure("ServerReporter: failed to send report - " + error);
+        for (int attempt = 1; attempt <= maxAttempts; ++attempt) {
+            if (HttpPost(payload, error)) {
+                logger_.LogInfo("ServerReporter: report sent successfully to " + config_.serverUrl +
+                    (attempt > 1 ? " (attempt " + std::to_string(attempt) + "/" + std::to_string(maxAttempts) + ")" : ""));
+                return;
+            }
+            logger_.LogFailure("ServerReporter: attempt " + std::to_string(attempt) + "/" +
+                std::to_string(maxAttempts) + " failed - " + error);
+            if (attempt < maxAttempts) {
+                Sleep(retryDelayMs);
+            }
         }
+        logger_.LogFailure("ServerReporter: giving up after " + std::to_string(maxAttempts) + " attempts - " + error);
     } catch (const std::exception& ex) {
         logger_.LogFailure(std::string("ServerReporter: exception while sending report - ") + ex.what());
     } catch (...) {
