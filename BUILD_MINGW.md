@@ -1,5 +1,10 @@
 # License Checker - Build Guide (MinGW/Qt5)
 
+> ⚠️ **OUTDATED.** This describes the old Qt5 + qmake build (`src/ui`,
+> `src/agent`, `src/common`), which no longer exist in this repository -
+> following it will fail immediately. The current build needs no Qt at
+> all: see [BUILD_VS2022.md](BUILD_VS2022.md) and run `build-msbuild.bat`.
+
 Build the License Checker for **Windows 7 SP1+** using MinGW and Qt5 with qmake.
 
 ## Prerequisites

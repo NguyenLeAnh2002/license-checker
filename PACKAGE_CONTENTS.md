@@ -1,132 +1,71 @@
-# License Checker UI - Complete Package
+# License Checker - Package Contents
 
-## File Cần Thiết Để Build Trên Máy Khác
+> ⚠️ This replaces the old version of this doc, which listed `UIOnly.pro`,
+> `SystemTrayIcon.*`, `LicenseDataModel.*`, `NamedPipeClient.*` and a Qt5
+> dependency - none of that exists in this repository anymore. There is no
+> separate "UI-only" package: the whole app is one small solution.
 
-### Root Files
-```
-UIOnly.pro                  # Main build configuration
-build-ui-only.bat          # Build script
-build-ui-only.ps1          # PowerShell build script (optional)
-```
+## What you need to build the whole app (18 source files + 2 project files)
 
-### UI Source Files (`src/ui/`)
 ```
-src/ui/
-├── main.cpp               # Application entry point
-├── MainWindow.h           # Main window header
-├── MainWindow.cpp         # Main window implementation
-├── SystemTrayIcon.h       # System tray header
-├── SystemTrayIcon.cpp     # System tray implementation
-├── LicenseDataModel.h     # Data model header
-└── LicenseDataModel.cpp   # Data model implementation
-```
+LicenseChecker.sln
 
-### Common/IPC Files (`src/common/`)
-```
-src/common/
-├── NamedPipeClient.h      # Named Pipe client header
-└── NamedPipeClient.cpp    # Named Pipe client implementation
-```
+src/license-detection/               (LicenseDetection.vcxproj - static library)
+├── LicenseDetector.h/cpp            - main detector orchestrator
+├── SLAPIDetector.h/cpp              - Windows SL API detection
+├── WMIDetector.h/cpp                - WMI-based detection
+├── RegistryDetector.h/cpp           - registry-based detection
+├── WindowsSLMgrDetector.h/cpp       - slmgr.vbs-based detection
+├── OfficeOSPPDetector.h/cpp         - Office (ospp.vbs) detection
+├── DetectionLogger.h/cpp            - file logging
+├── LicenseResult.h/cpp              - result data structure
+├── LicenseInfo.h                    - plain data structs
+└── LicenseStatusEnum.h              - LicenseStatus/KMSStatus enums
 
-## Total Files: 11 files
-
-## How to Use on Another Machine
-
-### Step 1: Copy Files
-Copy these exact files to new machine:
-```
-C:\YourPath\License-checker\
-├── UIOnly.pro
-├── build-ui-only.bat
-├── build-ui-only.ps1
-└── src/
-    ├── ui/
-    │   ├── main.cpp
-    │   ├── MainWindow.h
-    │   ├── MainWindow.cpp
-    │   ├── SystemTrayIcon.h
-    │   ├── SystemTrayIcon.cpp
-    │   ├── LicenseDataModel.h
-    │   └── LicenseDataModel.cpp
-    └── common/
-        ├── NamedPipeClient.h
-        └── NamedPipeClient.cpp
+src/ui-native/                       (LicenseCheckerUI.vcxproj - the .exe)
+├── main.cpp                         - WinMain entry point
+├── MainWindow.h/cpp                 - tabbed Win32 window (Windows/Office/Settings), all controls
+├── DetectionWorker.h/cpp            - background thread running the detection loop
+├── ServerReporter.h/cpp             - reports results to the controller over WinHTTP
+├── Localization.h/cpp               - Vietnamese/English strings
+├── StartupLog.h/cpp                 - minimal startup/crash log
+└── resource.h                       - app icon resource id
 ```
 
-### Step 2: Install Qt5 on New Machine
-- Download Qt5.15 LTS: https://www.qt.io/download-open-source
-- Select MinGW 8.1 64-bit
-- Install to: `C:\Qt\5.15.0\mingw81_64`
+Both `.vcxproj` files already exist in the repo and are wired together by
+`LicenseChecker.sln` - you don't hand-assemble this list to build, it's
+here for reference (e.g. if extracting just this app into another repo).
 
-### Step 3: Build
+## How to Build
+
+See [BUILD_VS2022.md](BUILD_VS2022.md):
 ```batch
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-cd C:\YourPath\License-checker
-build-ui-only.bat
+build-msbuild.bat
 ```
-
-### Step 4: Run
-```batch
-build\release\LicenseCheckerUI.exe
-```
-
-## File Descriptions
-
-| File | Purpose |
-|------|---------|
-| **UIOnly.pro** | qmake project file - defines build configuration |
-| **main.cpp** | Creates Qt application and MainWindow |
-| **MainWindow.h/cpp** | Main GUI with 3 tabs (Windows License, Office License, Settings) |
-| **SystemTrayIcon.h/cpp** | System tray integration with popup menu |
-| **LicenseDataModel.h/cpp** | Data structures for license information |
-| **NamedPipeClient.h/cpp** | Communication with service (or mock data) |
-| **build-ui-only.bat** | Windows batch build script |
-| **build-ui-only.ps1** | Windows PowerShell build script |
-
-## Dependencies
-
-### External
-- Qt5.15 LTS (with MinGW 8.1)
-- Windows 7 SP1 or newer
-
-### Internal
-- All code is self-contained in these 11 files
-- No external libraries required
+No Qt, no CMake, no qmake. Requires Visual Studio/Build Tools with the
+"Desktop development with C++" workload and the v142 individual toolset
+component.
 
 ## Build Output
 
-After successful build:
 ```
-build\release\LicenseCheckerUI.exe  (≈ 5-10 MB with Qt5 DLLs)
-```
-
-## Standalone Executable
-
-To make it portable, copy Qt5 DLLs:
-```batch
-mkdir dist
-copy build\release\LicenseCheckerUI.exe dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\Qt5Core.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\Qt5Gui.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\Qt5Widgets.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\Qt5Network.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\libgcc_s_seh-1.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\libstdc++-6.dll dist\
-copy C:\Qt\5.15.0\mingw81_64\bin\libwinpthread-1.dll dist\
+x64\Release\
+├── LicenseCheckerUI.exe    ← the whole app, ~500 KB
+├── LicenseCheckerUI.pdb    ← debug symbols (optional, keep for crash analysis)
+├── LicenseDetection.lib    ← intermediate static lib, not needed at runtime
+└── LicenseDetection.pdb
 ```
 
-Then you can run:
-```batch
-dist\LicenseCheckerUI.exe
-```
+## What to Ship
 
-On any Windows 7+ machine without Qt5 installed.
+Just `LicenseCheckerUI.exe` - see [DEPLOY_GUIDE.md](DEPLOY_GUIDE.md). It
+has no DLL dependencies beyond standard Windows system libraries every
+Windows install already has, so there's nothing else to package.
 
 ## File Size Reference
 
 | Component | Size |
 |-----------|------|
-| Source files | ~100 KB |
-| Build output (exe only) | ~500 KB |
-| With Qt5 DLLs | ~100 MB |
-| Compressed (7z) | ~30 MB |
+| Source files (18 .h/.cpp) | a few hundred KB |
+| `LicenseCheckerUI.exe` (Release) | ~500 KB |
+| Everything needed to run it | just that one file |

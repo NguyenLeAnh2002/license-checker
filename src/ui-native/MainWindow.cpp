@@ -1,8 +1,9 @@
 #include "MainWindow.h"
 #include "Localization.h"
-#include "PipeClient.h"
+#include "DetectionWorker.h"
 #include "resource.h"
 #include <string>
+#include <algorithm>
 #include <commctrl.h>
 #include <shlobj.h>
 #include <windowsx.h>
@@ -11,14 +12,125 @@
 #include <iomanip>
 #include <chrono>
 #include <winreg.h>
-#include <D:\\VNPT\\packages\\nlohmann.json.3.10.0\\build\\native\\include\\nlohmann\\json.hpp>
+#include <objidl.h>
+#include <gdiplus.h>
+#include <dwmapi.h>
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "dwmapi.lib")
+
+// Missing from the Windows 10.0.19041 SDK's dwmapi.h (added in later SDKs) -
+// values are stable/public, safe to declare ourselves. DwmSetWindowAttribute
+// silently no-ops on Windows versions that don't support them.
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
 
 extern HINSTANCE g_hInstance;
+
+// Posted by DetectionWorker's callback (worker thread) to marshal a finished
+// LicenseResult back to the UI thread. lParam owns a heap-allocated
+// LicenseResult*, freed by the handler in WndProc.
+const UINT WM_APP_LICENSE_READY = WM_APP + 1;
+
+namespace {
+
+// -- Modern theme palette -----------------------------------------------
+const COLORREF kWindowBackground = RGB(246, 247, 249);
+const COLORREF kTextColor = RGB(40, 44, 49);
+
+enum class BadgeStatus { Valid, Cracked, NotActivated, Unknown };
+
+// Windows: LicenseStatus's raw ordinal - 0=Legitimate, 1=Cracked,
+// 2=NotLicensed, 3=UnableToDetermine (LicenseStatusEnum.h).
+BadgeStatus ClassifyWindowsStatus(int licenseStatusCode) {
+    switch (licenseStatusCode) {
+        case 0:  return BadgeStatus::Valid;
+        case 1:  return BadgeStatus::Cracked;
+        case 2:  return BadgeStatus::NotActivated;
+        default: return BadgeStatus::Unknown;
+    }
+}
+
+// Office has no enum on the wire, just OSPP's raw "---XXX---" token (see
+// OfficeOSPPDetector.cpp). Mirrors the heuristic used for server reporting
+// in ServerReporter.cpp's OfficeStatusToRealString().
+BadgeStatus ClassifyOfficeStatus(const std::string& rawStatus) {
+    if (rawStatus.find("NON_GENUINE") != std::string::npos) {
+        return BadgeStatus::Cracked;
+    }
+    if (rawStatus.find("LICENSED") != std::string::npos) {
+        return BadgeStatus::Valid;
+    }
+    if (rawStatus.find("GRACE") != std::string::npos ||
+        rawStatus.find("NOTIFICATIONS") != std::string::npos ||
+        rawStatus.find("HOLD") != std::string::npos) {
+        return BadgeStatus::NotActivated;
+    }
+    return BadgeStatus::Unknown;
+}
+
+Gdiplus::Color BadgeColor(BadgeStatus status) {
+    switch (status) {
+        case BadgeStatus::Valid:        return Gdiplus::Color(255, 30, 130, 76);
+        case BadgeStatus::Cracked:      return Gdiplus::Color(255, 197, 48, 48);
+        case BadgeStatus::NotActivated: return Gdiplus::Color(255, 191, 128, 22);
+        default:                        return Gdiplus::Color(255, 120, 126, 134);
+    }
+}
+
+void AddRoundedRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
+    float d = radius * 2.0f;
+    path.AddArc(rect.X, rect.Y, d, d, 180, 90);
+    path.AddArc(rect.X + rect.Width - d, rect.Y, d, d, 270, 90);
+    path.AddArc(rect.X + rect.Width - d, rect.Y + rect.Height - d, d, d, 0, 90);
+    path.AddArc(rect.X, rect.Y + rect.Height - d, d, d, 90, 90);
+    path.CloseFigure();
+}
+
+// Shared by WndProc (m_hwnd's own STATIC children) and TabProc (labels
+// nested under m_hTabControl, which is their real WM_CTLCOLORSTATIC target).
+// Callers pass the brush matching whatever's actually behind that label
+// (the tab body vs. m_hwnd's own background) so it blends in instead of
+// showing as a mismatched box.
+//
+// Must return a real (non-hollow) background brush: the static control's
+// default paint handler fills its rectangle with whatever brush is returned
+// here before drawing the text. NULL_BRUSH skips that fill entirely, so on
+// every SetWindowText() the new text gets drawn over the old one instead of
+// replacing it.
+LRESULT HandleCtlColorStatic(WPARAM wParam, HBRUSH backgroundBrush) {
+    HDC hdc = (HDC)wParam;
+    SetTextColor(hdc, kTextColor);
+    SetBkMode(hdc, TRANSPARENT);
+    return (LRESULT)backgroundBrush;
+}
+
+bool IsSystemDarkModeEnabled() {
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            0, KEY_READ, &hKey) != ERROR_SUCCESS) {
+        return false;
+    }
+    DWORD value = 1;  // Default to light if the value is missing.
+    DWORD size = sizeof(value);
+    RegQueryValueExW(hKey, L"AppsUseLightTheme", nullptr, nullptr, (LPBYTE)&value, &size);
+    RegCloseKey(hKey);
+    return value == 0;
+}
+
+} // namespace
 
 static void LogMessage(const std::string& message) {
     const char* logFile = "license-detection.log";
@@ -45,6 +157,15 @@ const int TAB_WINDOWS = 0;
 const int TAB_OFFICE = 1;
 const int TAB_SETTINGS = 2;
 
+// Bottom-row layout (refresh status label + Check Now button). Shared by
+// CreateControls() (initial placement) and MainWindow::OnSize() (kept in
+// sync with the window's actual client size) so the two controls are
+// always computed from the same margins and never overlap.
+const int kCheckButtonWidth = 160;
+const int kCheckButtonHeight = 34;
+const int kBottomMargin = 20;
+const int kRefreshLabelHeight = 20;
+
 MainWindow::MainWindow()
     : m_hwnd(NULL), m_hTabControl(NULL), m_hCheckButton(NULL),
       m_hRefreshLabel(NULL), m_hLanguageLabel(NULL), m_hLanguageCombo(NULL),
@@ -58,10 +179,15 @@ MainWindow::MainWindow()
       m_hOfficeActivationIntervalLabel(NULL),
       m_hHostnameLabel(NULL), m_hMachineGuidLabel(NULL), m_hDepartmentLabel(NULL),
       m_hServiceStatusLabel(NULL), m_hLastReportLabel(NULL),
-      m_pipeClient(std::make_unique<PipeClient>("LicenseChecker")) {
+      m_windowsLicenseStatusCode(3), m_origTabWndProc(nullptr) {
 }
 
 MainWindow::~MainWindow() {
+    // Stop the worker (joins its thread) before the window/handles it might
+    // still post messages to go away.
+    if (m_detectionWorker) {
+        m_detectionWorker->Stop();
+    }
     if (m_hwnd) {
         DestroyWindow(m_hwnd);
     }
@@ -73,7 +199,7 @@ bool MainWindow::Create() {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = g_hInstance;
     wc.lpszClassName = L"LicenseCheckerWindow";
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = CreateSolidBrush(kWindowBackground);
     wc.hIcon = LoadIconW(g_hInstance, MAKEINTRESOURCEW(IDI_APPICON));
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
 
@@ -96,11 +222,22 @@ bool MainWindow::Create() {
         return false;
     }
 
+    ApplyDwmVisuals();
     CreateControls();
-    RefreshLicenseData();
 
-    // Start auto-refresh timer (5 minutes = 300000ms)
-    SetTimer(m_hwnd, 1, 300000, NULL);
+    // Runs detection in-process (no more separate Agent process/service):
+    // checks immediately, then every 5 minutes while this window is open.
+    // The callback runs on the worker thread, so it only marshals the
+    // result to the UI thread via PostMessage - actual rendering happens
+    // in OnLicenseResultReady() on receipt of WM_APP_LICENSE_READY.
+    m_detectionWorker = std::make_unique<DetectionWorker>(std::chrono::seconds(300),
+        [this](const LicenseResult& result) {
+            LicenseResult* copy = new LicenseResult(result);
+            if (!PostMessageW(m_hwnd, WM_APP_LICENSE_READY, 0, (LPARAM)copy)) {
+                delete copy;
+            }
+        });
+    m_detectionWorker->Start();
 
     return true;
 }
@@ -112,7 +249,98 @@ void MainWindow::Show(int nCmdShow) {
     }
 }
 
+// Dark title bar (matches the system theme) and rounded window corners
+// (Windows 11 only). Both attributes are unknown to the 10.0.19041 SDK this
+// project builds against - DwmSetWindowAttribute simply returns an error
+// and does nothing on Windows versions/builds that don't support them, so
+// this is safe to call unconditionally.
+void MainWindow::ApplyDwmVisuals() {
+    BOOL useDarkMode = IsSystemDarkModeEnabled() ? TRUE : FALSE;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &useDarkMode, sizeof(useDarkMode));
+
+    DWORD cornerPreference = DWMWCP_ROUND;
+    DwmSetWindowAttribute(m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPreference, sizeof(cornerPreference));
+}
+
+// Paints one of the two owner-drawn "License Status: <value>" labels: the
+// prefix in plain text, then the value inside a colored rounded pill (green/
+// red/amber/gray) so the status reads at a glance instead of being just
+// another line of text.
+void MainWindow::DrawStatusLabel(DRAWITEMSTRUCT* dis) {
+    wchar_t buf[512] = {0};
+    GetWindowTextW(dis->hwndItem, buf, _countof(buf));
+    std::wstring text(buf);
+
+    BadgeStatus status = (dis->hwndItem == m_hWindowsLicenseDetailLabel)
+        ? ClassifyWindowsStatus(m_windowsLicenseStatusCode)
+        : ClassifyOfficeStatus(m_officeLicenseStatusRaw);
+
+    Gdiplus::Graphics graphics(dis->hDC);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+    // The item isn't pre-erased for SS_OWNERDRAW statics - fill it to match
+    // the (non-owner-drawn) tab body around it so there's no visible seam.
+    COLORREF btnFace = GetSysColor(COLOR_BTNFACE);
+    Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255,
+        GetRValue(btnFace), GetGValue(btnFace), GetBValue(btnFace)));
+    graphics.FillRectangle(&bgBrush, (Gdiplus::REAL)dis->rcItem.left, (Gdiplus::REAL)dis->rcItem.top,
+        (Gdiplus::REAL)(dis->rcItem.right - dis->rcItem.left),
+        (Gdiplus::REAL)(dis->rcItem.bottom - dis->rcItem.top));
+
+    size_t sep = text.find(L": ");
+    std::wstring prefix = (sep == std::wstring::npos) ? text : text.substr(0, sep + 1);
+    std::wstring value = (sep == std::wstring::npos) ? L"" : text.substr(sep + 2);
+
+    // 12pt matches the other labels' CreateFontW(-16, ...) (-16 device px at
+    // 96 DPI == 12pt), so the badge line reads the same size as its siblings.
+    Gdiplus::FontFamily fontFamily(L"Segoe UI");
+    Gdiplus::Font font(&fontFamily, 12.0f, Gdiplus::FontStyleRegular, Gdiplus::UnitPoint);
+    Gdiplus::SolidBrush textBrush(Gdiplus::Color(255,
+        GetRValue(kTextColor), GetGValue(kTextColor), GetBValue(kTextColor)));
+
+    Gdiplus::REAL originX = (Gdiplus::REAL)dis->rcItem.left;
+    Gdiplus::REAL originY = (Gdiplus::REAL)dis->rcItem.top + 2.0f;
+    graphics.DrawString(prefix.c_str(), -1, &font, Gdiplus::PointF(originX, originY), &textBrush);
+
+    Gdiplus::RectF prefixBounds;
+    graphics.MeasureString(prefix.c_str(), -1, &font, Gdiplus::PointF(0, 0), &prefixBounds);
+
+    if (!value.empty()) {
+        Gdiplus::RectF valueBounds;
+        graphics.MeasureString(value.c_str(), -1, &font, Gdiplus::PointF(0, 0), &valueBounds);
+
+        const float padX = 10.0f, padY = 3.0f;
+        Gdiplus::RectF pillRect(
+            originX + prefixBounds.Width + 6.0f,
+            originY - 2.0f,
+            valueBounds.Width + padX * 2.0f,
+            valueBounds.Height + padY * 2.0f - 4.0f);
+
+        Gdiplus::GraphicsPath path;
+        AddRoundedRect(path, pillRect, pillRect.Height / 2.0f);
+        Gdiplus::SolidBrush pillBrush(BadgeColor(status));
+        graphics.FillPath(&pillBrush, &path);
+
+        Gdiplus::SolidBrush pillTextBrush(Gdiplus::Color(255, 255, 255, 255));
+        graphics.DrawString(value.c_str(), -1, &font,
+            Gdiplus::PointF(pillRect.X + padX, pillRect.Y + padY - 2.0f), &pillTextBrush);
+    }
+}
+
 LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    // Can arrive before WM_CREATE (while the window is still being sized),
+    // so handle it before the GWLP_USERDATA/pThis lookup below - it needs no
+    // per-instance state. Without a floor, shrinking the window below what
+    // the fixed-width bottom-row controls need clips their text (e.g. the
+    // refresh label) instead of reflowing it.
+    if (msg == WM_GETMINMAXINFO) {
+        MINMAXINFO* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize.x = 800;
+        mmi->ptMinTrackSize.y = 400;
+        return 0;
+    }
+
     MainWindow* pThis = NULL;
 
     if (msg == WM_CREATE) {
@@ -144,18 +372,55 @@ LRESULT CALLBACK MainWindow::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         pThis->OnNotify(lParam);
         return 0;
 
-    case WM_TIMER:
-        pThis->RefreshLicenseData();
+    case WM_APP_LICENSE_READY: {
+        LicenseResult* result = reinterpret_cast<LicenseResult*>(lParam);
+        if (result) {
+            pThis->OnLicenseResultReady(*result);
+            delete result;
+        }
         return 0;
+    }
+
+    case WM_CTLCOLORSTATIC:
+        // Same brush as the window class background (set in Create()) so
+        // m_hwnd's own STATIC children (e.g. m_hRefreshLabel) blend in
+        // instead of showing a mismatched box.
+        return HandleCtlColorStatic(wParam, (HBRUSH)GetClassLongPtr(hwnd, GCLP_HBRBACKGROUND));
 
     case WM_DESTROY:
-        KillTimer(hwnd, 1);
         PostQuitMessage(0);
         return 0;
 
     default:
         return DefWindowProc(hwnd, msg, wParam, lParam);
     }
+}
+
+// Subclass of m_hTabControl (SysTabControl32). All of the Windows/Office/
+// Settings content labels are created as children of the tab control, not
+// m_hwnd, so WM_CTLCOLORSTATIC and WM_DRAWITEM for them land here rather
+// than in MainWindow::WndProc.
+LRESULT CALLBACK MainWindow::TabProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    MainWindow* pThis = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+
+    if (pThis) {
+        if (msg == WM_CTLCOLORSTATIC) {
+            return HandleCtlColorStatic(wParam, GetSysColorBrush(COLOR_BTNFACE));
+        }
+        if (msg == WM_DRAWITEM) {
+            DRAWITEMSTRUCT* dis = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+            if (dis->hwndItem == pThis->m_hWindowsLicenseDetailLabel ||
+                dis->hwndItem == pThis->m_hOfficeLicenseStatusLabel) {
+                pThis->DrawStatusLabel(dis);
+                return TRUE;
+            }
+        }
+    }
+
+    if (pThis && pThis->m_origTabWndProc) {
+        return CallWindowProc(pThis->m_origTabWndProc, hwnd, msg, wParam, lParam);
+    }
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
 void MainWindow::CreateControls() {
@@ -166,6 +431,11 @@ void MainWindow::CreateControls() {
         10, 10, 780, 280,
         m_hwnd, (HMENU)ID_TAB_CONTROL, g_hInstance, NULL
     );
+
+    // Subclass the tab control so its child labels' WM_CTLCOLORSTATIC/
+    // WM_DRAWITEM (their real parent) land in TabProc.
+    SetWindowLongPtr(m_hTabControl, GWLP_USERDATA, (LONG_PTR)this);
+    m_origTabWndProc = (WNDPROC)SetWindowLongPtr(m_hTabControl, GWLP_WNDPROC, (LONG_PTR)TabProc);
 
     // Insert 3 tabs: Windows License, Office License, Settings
     TCITEMW tie;
@@ -185,7 +455,7 @@ void MainWindow::CreateControls() {
 
     // Windows License content
     int windowsYPos = 50;
-    int lineHeight = 22;
+    int lineHeight = 26;
 
     m_hWindowsNameLabel = CreateWindowW(
         L"STATIC", L"Name: Unknown",
@@ -213,7 +483,7 @@ void MainWindow::CreateControls() {
 
     m_hWindowsLicenseDetailLabel = CreateWindowW(
         L"STATIC", L"License Status: Unknown",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
         30, windowsYPos, 730, lineHeight,
         m_hTabControl, NULL, g_hInstance, NULL
     );
@@ -271,7 +541,7 @@ void MainWindow::CreateControls() {
 
     m_hOfficeLicenseStatusLabel = CreateWindowW(
         L"STATIC", L"License Status: Unknown",
-        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        WS_CHILD | WS_VISIBLE | SS_OWNERDRAW,
         30, officeYPos, 730, lineHeight,
         m_hTabControl, NULL, g_hInstance, NULL
     );
@@ -343,8 +613,13 @@ void MainWindow::CreateControls() {
     );
     settingsYPos += lineHeight;
 
-    // Language selector in Settings tab (created as child of main window, not tab control)
-    // This ensures WM_COMMAND messages are sent to m_hwnd's WndProc
+    // Language selector in Settings tab (created as child of main window, not tab control,
+    // so its WM_COMMAND lands on m_hwnd's WndProc). Because of that, its position must be
+    // converted from "coordinates relative to m_hTabControl" (like every other Settings row)
+    // into m_hwnd-relative coordinates. A tab control's children are positioned from its
+    // client-area origin (0,0) same as any other parent - NOT offset by the tab strip (every
+    // other row already accounts for that by starting at y=50) - so the conversion is just a
+    // straight translation by the tab control's own position within m_hwnd.
     m_hLanguageLabel = CreateWindowW(
         L"STATIC", L"Language:",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
@@ -352,10 +627,14 @@ void MainWindow::CreateControls() {
         m_hTabControl, NULL, g_hInstance, NULL
     );
 
+    const int tabControlX = 10, tabControlY = 10;  // matches m_hTabControl's CreateWindowW position
+    int comboX = tabControlX + 140;
+    int comboY = tabControlY + settingsYPos - 2;  // -2: nudge up to visually center against the label
+
     m_hLanguageCombo = CreateWindowW(
         L"COMBOBOX", L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST,
-        140, settingsYPos, 120, 200,
+        comboX, comboY, 120, 200,
         m_hwnd, (HMENU)ID_LANGUAGE_COMBO, g_hInstance, NULL
     );
 
@@ -363,23 +642,32 @@ void MainWindow::CreateControls() {
     SendMessageW(m_hLanguageCombo, CB_ADDSTRING, 0, (LPARAM)L"English");
     SendMessageW(m_hLanguageCombo, CB_SETCURSEL, 0, 0);  // Default to Vietnamese
 
-    // Bottom buttons (outside tabs)
+    // Bottom buttons (outside tabs) - sized/positioned properly by
+    // LayoutBottomControls() below, called once the window's real client
+    // size is known; these initial values are just placeholders.
     m_hRefreshLabel = CreateWindowW(
         L"STATIC", L"Ready",
         WS_CHILD | WS_VISIBLE | SS_LEFT,
-        10, 300, 600, 20,
+        kBottomMargin, 300, 100, kRefreshLabelHeight,
         m_hwnd, NULL, g_hInstance, NULL
     );
 
     m_hCheckButton = CreateWindowW(
         L"BUTTON", L"Check Now",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        680, 295, 90, 30,
+        620, 292, kCheckButtonWidth, kCheckButtonHeight,
         m_hwnd, (HMENU)ID_CHECK_BUTTON, g_hInstance, NULL
     );
 
-    // Set font
-    HFONT hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    // Set font - Segoe UI has shipped on every Windows since Vista; falls
+    // back to the stock GUI font if somehow unavailable.
+    HFONT hFont = CreateFontW(
+        -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!hFont) {
+        hFont = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    }
     SendMessage(m_hTabControl, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hWindowsNameLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hWindowsEditionLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
@@ -411,13 +699,35 @@ void MainWindow::CreateControls() {
 
     // Ensure tab control is on top of combo box (z-order fix)
     SetWindowPos(m_hTabControl, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+
+    // Position the bottom row using the window's real client size (which is
+    // smaller than the "800x400" passed to CreateWindowExW - that includes
+    // the title bar/borders) rather than the placeholder values used above.
+    RECT clientRect;
+    GetClientRect(m_hwnd, &clientRect);
+    LayoutBottomControls(clientRect.right, clientRect.bottom);
+}
+
+// Keeps the refresh label and Check Now button from ever overlapping: the
+// label's width is computed from whatever space is actually left after the
+// fixed-size button, instead of both using independent hardcoded widths.
+void MainWindow::LayoutBottomControls(int cx, int cy) {
+    if (m_hCheckButton) {
+        MoveWindow(m_hCheckButton, cx - kCheckButtonWidth - kBottomMargin, cy - kCheckButtonHeight - kBottomMargin,
+            kCheckButtonWidth, kCheckButtonHeight, TRUE);
+    }
+    if (m_hRefreshLabel) {
+        int labelWidth = cx - kCheckButtonWidth - kBottomMargin * 3;
+        if (labelWidth < 100) {
+            labelWidth = 100;
+        }
+        int labelY = cy - kBottomMargin - (kCheckButtonHeight + kRefreshLabelHeight) / 2;
+        MoveWindow(m_hRefreshLabel, kBottomMargin, labelY, labelWidth, kRefreshLabelHeight, TRUE);
+    }
 }
 
 void MainWindow::OnSize(int cx, int cy) {
-    // Resize controls based on window size
-    if (m_hCheckButton) {
-        MoveWindow(m_hCheckButton, cx - 100, cy - 50, 90, 30, TRUE);
-    }
+    LayoutBottomControls(cx, cy);
 }
 
 void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
@@ -589,7 +899,7 @@ void MainWindow::OnLanguageChanged() {
     Localization::SetLanguage(newLang);
     UpdateUITexts();               // Updates chrome (button, tabs, window title, language label)
                                     // and resets all content labels with new language prefixes
-    RefreshLicenseData();           // Reload data from pipe with new language
+    OnLicenseResultReady(m_lastResult);  // Re-render the last known result in the new language
 
     // Force the tab control and its child labels to repaint immediately. Without this,
     // the TCM_SETITEMW calls above (updating tab captions) can leave the tab body
@@ -656,211 +966,138 @@ void MainWindow::SwitchTab(int tabIndex) {
     }
 }
 
-void MainWindow::RefreshLicenseData() {
-    if (!m_pipeClient) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::ServiceNotConnected));
-        return;
+void MainWindow::OnLicenseResultReady(const LicenseResult& result) {
+    m_lastResult = result;
+
+    const WindowsLicenseInfo& winInfo = result.GetWindowsLicenseInfo();
+    const OfficeLicenseInfo& officeInfo = result.GetOfficeLicenseInfo();
+
+    m_windowsLicenseStatusCode = static_cast<int>(result.GetLicenseStatus());
+    m_officeLicenseStatusRaw = officeInfo.licenseStatus;
+
+    // Windows Name
+    SetWindowTextW(m_hWindowsNameLabel,
+        (std::wstring(Localization::T(Str::Name)) + L" " + Localization::Widen(winInfo.name)).c_str());
+
+    // Windows Edition
+    SetWindowTextW(m_hWindowsEditionLabel,
+        (std::wstring(Localization::T(Str::Edition)) + L" " + Localization::Widen(result.GetWindowsEdition())).c_str());
+
+    // Windows Description
+    SetWindowTextW(m_hWindowsDescriptionLabel,
+        (std::wstring(Localization::T(Str::Description)) + L" " + Localization::Widen(winInfo.description)).c_str());
+
+    // License Status Detail (with translation of status value)
+    SetWindowTextW(m_hWindowsLicenseDetailLabel,
+        (std::wstring(Localization::T(Str::LicenseStatus)) + L" " +
+         Localization::TranslateStatusValue(winInfo.licenseStatus)).c_str());
+
+    // Product Key
+    SetWindowTextW(m_hWindowsProductKeyLabel,
+        (std::wstring(Localization::T(Str::ProductKey)) + L" " + Localization::Widen(winInfo.partialProductKey)).c_str());
+
+    // KMS Status
+    std::wstring kmsStatusStr = Localization::T(Str::KmsStatus);
+    kmsStatusStr += L" ";
+    switch (result.GetKmsStatus()) {
+        case KMSStatus::NotKMS:      kmsStatusStr += Localization::T(Str::KmsNotUsing); break;
+        case KMSStatus::KMSDetected: kmsStatusStr += Localization::T(Str::KmsDetected); break;
+        case KMSStatus::KMSNotFound: kmsStatusStr += Localization::T(Str::KmsNotFound); break;
+        case KMSStatus::Error:       kmsStatusStr += Localization::T(Str::KmsError); break;
+        default:                     kmsStatusStr += Localization::T(Str::Unknown); break;
+    }
+    SetWindowTextW(m_hWindowsKmsStatusLabel, kmsStatusStr.c_str());
+
+    // KMS Server
+    SetWindowTextW(m_hWindowsKmsLabel,
+        (std::wstring(Localization::T(Str::KmsServer)) + L" " + Localization::Widen(result.GetWindowsKmsServer())).c_str());
+
+    // Last Detected
+    {
+        std::time_t t = std::chrono::system_clock::to_time_t(result.GetTimestamp());
+        struct tm timeinfo;
+        localtime_s(&timeinfo, &t);
+        wchar_t buf[32] = {0};
+        wcsftime(buf, _countof(buf), L"%d/%m/%Y %H:%M:%S", &timeinfo);
+        SetWindowTextW(m_hWindowsLastDetectedLabel,
+            (std::wstring(Localization::T(Str::LastDetected)) + L" " + buf).c_str());
     }
 
-    std::string response = m_pipeClient->SendCommand("GetLicenseData");
-    if (response.empty()) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::FailedToGetData));
-        return;
+    // Office: Status
+    SetWindowTextW(m_hOfficeStatusLabel,
+        (std::wstring(Localization::T(Str::Status)) + L" " +
+         (officeInfo.licenseStatus.empty() ? Localization::T(Str::NotDetected) :
+          Localization::TranslateStatusValue(officeInfo.licenseStatus))).c_str());
+
+    // Office: License Name
+    SetWindowTextW(m_hOfficeLicenseNameLabel,
+        (std::wstring(Localization::T(Str::LicenseName)) + L" " + Localization::Widen(officeInfo.licenseName)).c_str());
+
+    // Office: License Status Detail
+    SetWindowTextW(m_hOfficeLicenseStatusLabel,
+        (std::wstring(Localization::T(Str::LicenseStatus)) + L" " +
+         Localization::TranslateStatusValue(officeInfo.licenseStatus)).c_str());
+
+    // Office: Product Key
+    SetWindowTextW(m_hOfficeProductKeyLabel,
+        (std::wstring(Localization::T(Str::ProductKey)) + L" " + Localization::Widen(officeInfo.partialProductKey)).c_str());
+
+    // Office: KMS Server (top-level accessor, not officeInfo.kmsServer - matches what was reported before)
+    SetWindowTextW(m_hOfficeKmsLabel,
+        (std::wstring(Localization::T(Str::KmsServer)) + L" " + Localization::Widen(result.GetOfficeKmsServer())).c_str());
+
+    // Office: Grace Period
+    SetWindowTextW(m_hOfficeGracePeriodLabel,
+        (std::wstring(Localization::T(Str::GracePeriod)) + L" " + Localization::Widen(officeInfo.remainingGrace)).c_str());
+
+    // Office: Activation Interval
+    SetWindowTextW(m_hOfficeActivationIntervalLabel,
+        (std::wstring(Localization::T(Str::ActivationInterval)) + L" " + Localization::Widen(officeInfo.activationInterval)).c_str());
+
+    // Settings - hostname from system
+    wchar_t computerName[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD computerNameLen = MAX_COMPUTERNAME_LENGTH + 1;
+    if (GetComputerNameW(computerName, &computerNameLen)) {
+        SetWindowTextW(m_hHostnameLabel,
+            (std::wstring(Localization::T(Str::Hostname)) + L" " + computerName).c_str());
+    } else {
+        SetWindowTextW(m_hHostnameLabel,
+            (std::wstring(Localization::T(Str::Hostname)) + L" " + Localization::T(Str::Unknown)).c_str());
     }
 
-    try {
-        auto json = nlohmann::json::parse(response);
-
-        if (json["status"] == "success" && json.contains("data")) {
-            auto data = json["data"];
-
-            // Windows License
-            if (data.contains("windows")) {
-                auto win = data["windows"];
-                int licenseStatus = win.value("licenseStatus", 0);
-                int kmsStatus = win.value("kmsStatus", 0);
-
-                // Windows Name
-                std::wstring nameStr = std::wstring(Localization::T(Str::Name)) + L" " +
-                    Localization::Widen(win.value("name", std::string("Unknown")));
-                SetWindowTextW(m_hWindowsNameLabel, nameStr.c_str());
-
-                // Windows Edition
-                std::wstring edition = std::wstring(Localization::T(Str::Edition)) + L" " +
-                    Localization::Widen(win.value("edition", std::string("Unknown")));
-                SetWindowTextW(m_hWindowsEditionLabel, edition.c_str());
-
-                // Windows Description
-                std::wstring descStr = std::wstring(Localization::T(Str::Description)) + L" " +
-                    Localization::Widen(win.value("description", std::string("Unknown")));
-                SetWindowTextW(m_hWindowsDescriptionLabel, descStr.c_str());
-
-                // License Status Detail (with translation of status value)
-                std::wstring licenseDetail = std::wstring(Localization::T(Str::LicenseStatus)) + L" " +
-                    Localization::TranslateStatusValue(win.value("licenseStatusDetail", std::string("Unknown")));
-                SetWindowTextW(m_hWindowsLicenseDetailLabel, licenseDetail.c_str());
-
-                // Product Key
-                std::wstring keyStr = std::wstring(Localization::T(Str::ProductKey)) + L" " +
-                    Localization::Widen(win.value("partialProductKey", std::string("Unknown")));
-                SetWindowTextW(m_hWindowsProductKeyLabel, keyStr.c_str());
-
-                // KMS Status
-                std::wstring kmsStatusStr = Localization::T(Str::KmsStatus);
-                kmsStatusStr += L" ";
-                switch (kmsStatus) {
-                    case 0: kmsStatusStr += Localization::T(Str::KmsNotUsing); break;
-                    case 1: kmsStatusStr += Localization::T(Str::KmsDetected); break;
-                    case 2: kmsStatusStr += Localization::T(Str::KmsNotFound); break;
-                    case 3: kmsStatusStr += Localization::T(Str::KmsError); break;
-                    default: kmsStatusStr += Localization::T(Str::Unknown); break;
-                }
-                SetWindowTextW(m_hWindowsKmsStatusLabel, kmsStatusStr.c_str());
-
-                // KMS Server
-                std::wstring kmsServer = std::wstring(Localization::T(Str::KmsServer)) + L" " +
-                    Localization::Widen(win.value("kmsServer", std::string("Not Detected")));
-                SetWindowTextW(m_hWindowsKmsLabel, kmsServer.c_str());
-
-                // Last Detected
-                std::wstring lastDetected = std::wstring(Localization::T(Str::LastDetected)) + L" " +
-                    Localization::Widen(win.value("lastDetected", std::string("Never")));
-                SetWindowTextW(m_hWindowsLastDetectedLabel, lastDetected.c_str());
-            }
-
-            // Office License
-            if (data.contains("office")) {
-                auto office = data["office"];
-                std::string officeLicenseStatus = office.value("licenseStatus", std::string("Not Detected"));
-                std::string licenseName = office.value("licenseName", std::string("Not Detected"));
-
-                // Status
-                std::wstring statusDisplay = std::wstring(Localization::T(Str::Status)) + L" " +
-                    (officeLicenseStatus.empty() ? Localization::T(Str::NotDetected) :
-                     Localization::TranslateStatusValue(officeLicenseStatus));
-                SetWindowTextW(m_hOfficeStatusLabel, statusDisplay.c_str());
-
-                // License Name
-                std::wstring licNameStr = std::wstring(Localization::T(Str::LicenseName)) + L" " +
-                    Localization::Widen(licenseName);
-                SetWindowTextW(m_hOfficeLicenseNameLabel, licNameStr.c_str());
-
-                // License Status Detail
-                std::wstring licStatusDetail = std::wstring(Localization::T(Str::LicenseStatus)) + L" " +
-                    Localization::TranslateStatusValue(officeLicenseStatus);
-                SetWindowTextW(m_hOfficeLicenseStatusLabel, licStatusDetail.c_str());
-
-                // Product Key
-                std::wstring officeKey = Localization::Widen(office.value("partialProductKey", std::string("Unknown")));
-                std::wstring officeKeyStr = std::wstring(Localization::T(Str::ProductKey)) + L" " + officeKey;
-                SetWindowTextW(m_hOfficeProductKeyLabel, officeKeyStr.c_str());
-
-                // KMS Server
-                std::wstring officeKmsServer = Localization::Widen(office.value("kmsServer", std::string("Not Detected")));
-                std::wstring kmsLabel = std::wstring(Localization::T(Str::KmsServer)) + L" " + officeKmsServer;
-                SetWindowTextW(m_hOfficeKmsLabel, kmsLabel.c_str());
-
-                // Grace Period
-                std::wstring remainingGrace = Localization::Widen(office.value("remainingGrace", std::string("Unknown")));
-                std::wstring graceStr = std::wstring(Localization::T(Str::GracePeriod)) + L" " + remainingGrace;
-                SetWindowTextW(m_hOfficeGracePeriodLabel, graceStr.c_str());
-
-                // Activation Interval
-                std::wstring activationInterval = Localization::Widen(office.value("activationInterval", std::string("Unknown")));
-                std::wstring activationStr = std::wstring(Localization::T(Str::ActivationInterval)) + L" " + activationInterval;
-                SetWindowTextW(m_hOfficeActivationIntervalLabel, activationStr.c_str());
-            } else {
-                SetWindowTextW(m_hOfficeStatusLabel,
-                    (std::wstring(Localization::T(Str::Status)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeLicenseNameLabel,
-                    (std::wstring(Localization::T(Str::LicenseName)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeLicenseStatusLabel,
-                    (std::wstring(Localization::T(Str::LicenseStatus)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeProductKeyLabel,
-                    (std::wstring(Localization::T(Str::ProductKey)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeKmsLabel,
-                    (std::wstring(Localization::T(Str::KmsServer)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeGracePeriodLabel,
-                    (std::wstring(Localization::T(Str::GracePeriod)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-                SetWindowTextW(m_hOfficeActivationIntervalLabel,
-                    (std::wstring(Localization::T(Str::ActivationInterval)) + L" " +
-                     Localization::T(Str::NotDetected)).c_str());
-            }
-
-            // Settings - get hostname from system
-            wchar_t computerName[MAX_COMPUTERNAME_LENGTH + 1];
-            DWORD computerNameLen = MAX_COMPUTERNAME_LENGTH + 1;
-            if (GetComputerNameW(computerName, &computerNameLen)) {
-                std::wstring hostnameStr = std::wstring(Localization::T(Str::Hostname)) + L" " + computerName;
-                SetWindowTextW(m_hHostnameLabel, hostnameStr.c_str());
-            } else {
-                SetWindowTextW(m_hHostnameLabel,
-                    (std::wstring(Localization::T(Str::Hostname)) + L" " +
-                     Localization::T(Str::Unknown)).c_str());
-            }
-
-            // Machine GUID - try to get from registry
-            HKEY hKey;
-            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-                wchar_t guidBuf[256];
-                DWORD size = sizeof(guidBuf);
-                if (RegQueryValueExW(hKey, L"MachineGuid", NULL, NULL, (LPBYTE)guidBuf, &size) == ERROR_SUCCESS) {
-                    std::wstring guidStr = std::wstring(Localization::T(Str::MachineGuid)) + L" " + guidBuf;
-                    SetWindowTextW(m_hMachineGuidLabel, guidStr.c_str());
-                } else {
-                    SetWindowTextW(m_hMachineGuidLabel,
-                        (std::wstring(Localization::T(Str::MachineGuid)) + L" " +
-                         Localization::T(Str::Unknown)).c_str());
-                }
-                RegCloseKey(hKey);
-            } else {
-                SetWindowTextW(m_hMachineGuidLabel,
-                    (std::wstring(Localization::T(Str::MachineGuid)) + L" " +
-                     Localization::T(Str::Unknown)).c_str());
-            }
-
-            // Department - placeholder (from pipe data if available, otherwise Unknown)
-            SetWindowTextW(m_hDepartmentLabel,
-                (std::wstring(Localization::T(Str::Department)) + L" " +
-                 Localization::T(Str::Unknown)).c_str());
-
-            SetWindowTextW(m_hServiceStatusLabel,
-                (std::wstring(Localization::T(Str::ServiceStatus)) + L" " +
-                 Localization::T(Str::Online)).c_str());
-            SetWindowTextW(m_hRefreshLabel, Localization::T(Str::LastUpdatedNow));
+    // Machine GUID - from registry
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Cryptography", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        wchar_t guidBuf[256];
+        DWORD size = sizeof(guidBuf);
+        if (RegQueryValueExW(hKey, L"MachineGuid", NULL, NULL, (LPBYTE)guidBuf, &size) == ERROR_SUCCESS) {
+            SetWindowTextW(m_hMachineGuidLabel,
+                (std::wstring(Localization::T(Str::MachineGuid)) + L" " + guidBuf).c_str());
+        } else {
+            SetWindowTextW(m_hMachineGuidLabel,
+                (std::wstring(Localization::T(Str::MachineGuid)) + L" " + Localization::T(Str::Unknown)).c_str());
         }
-    } catch (const std::exception& ex) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::ParseError));
+        RegCloseKey(hKey);
+    } else {
+        SetWindowTextW(m_hMachineGuidLabel,
+            (std::wstring(Localization::T(Str::MachineGuid)) + L" " + Localization::T(Str::Unknown)).c_str());
     }
+
+    // Department - placeholder (no source of truth for this yet)
+    SetWindowTextW(m_hDepartmentLabel,
+        (std::wstring(Localization::T(Str::Department)) + L" " + Localization::T(Str::Unknown)).c_str());
+
+    SetWindowTextW(m_hServiceStatusLabel,
+        (std::wstring(Localization::T(Str::ServiceStatus)) + L" " +
+         Localization::T(result.IsError() ? Str::Offline : Str::Online)).c_str());
+
+    SetWindowTextW(m_hRefreshLabel,
+        Localization::T(result.IsError() ? Str::ErrorDuringCheck : Str::LastUpdatedNow));
 }
 
 void MainWindow::CheckNow() {
     SetWindowTextW(m_hRefreshLabel, Localization::T(Str::Checking));
-    if (!m_pipeClient) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::ServiceNotConnected));
-        return;
-    }
-
-    try {
-        std::string response = m_pipeClient->SendCommand("RequestImmediateCheck");
-        if (response.empty()) {
-            SetWindowTextW(m_hRefreshLabel, Localization::T(Str::FailedToQueueCheck));
-            return;
-        }
-
-        Sleep(3000);  // Wait for detection to complete
-        RefreshLicenseData();
-    }
-    catch (const std::exception& ex) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::ErrorDuringCheck));
-    }
-    catch (...) {
-        SetWindowTextW(m_hRefreshLabel, Localization::T(Str::UnknownErrorDuringCheck));
+    if (m_detectionWorker) {
+        m_detectionWorker->RequestImmediateCheck();
     }
 }

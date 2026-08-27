@@ -1,4 +1,11 @@
 @echo off
+REM ============================================================
+REM OUTDATED: this builds the old Qt-based UI (src/ui, src/agent,
+REM src/common via LicenseChecker.pro), which no longer exist in
+REM this repository - this script will fail immediately.
+REM Current build: run build-msbuild.bat instead (no Qt needed).
+REM See BUILD_VS2022.md.
+REM ============================================================
 REM License Checker - Build Script for MinGW/Qt5
 REM This script builds the entire project using qmake and mingw32-make
 

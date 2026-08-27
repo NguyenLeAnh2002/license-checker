@@ -1,292 +1,145 @@
-# Build Troubleshooting Guide
+# Build & Run Troubleshooting Guide
 
-## Error: "cannot find -license_detection"
+> ⚠️ This replaces the old version of this doc, which covered qmake/MinGW/Qt5
+> errors and a separate Windows-service agent. None of that applies anymore
+> - the current build is MSBuild-only (no Qt) and the app is a single exe
+> with no service to install. See [BUILD_VS2022.md](BUILD_VS2022.md) for
+> the current build path.
+
+## Error: "MSBuild : error : Cannot find msbuild.exe" / `msbuild` not recognized
 
 ### Cause
-The license_detection library hasn't been built yet, or the path is wrong.
+Visual Studio / Build Tools isn't installed, or its MSBuild isn't in PATH.
 
 ### Solution
-
-**Option 1: Clean Build (Recommended)**
 ```batch
-cd build
-mingw32-make distclean
-cd ..
-rmdir /s /q build
-build-mingw.bat
+where msbuild
 ```
-
-**Option 2: Verify Qt5 Path**
+If not found, either open a "Developer Command Prompt for VS" (which sets
+PATH automatically), or point at it directly:
 ```batch
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-echo %Qt5_DIR%
-dir "%Qt5_DIR%\bin\qmake.exe"
-```
-
-Should show: `C:\Qt\5.15.0\mingw81_64\bin\qmake.exe`
-
-**Option 3: Manual Build Order**
-```batch
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-set PATH=%Qt5_DIR%\bin;%PATH%
-
-REM Clean
-rmdir /s /q build
-
-REM Create fresh build dir
-mkdir build
-cd build
-
-REM Configure
-qmake -r -spec win32-g++ ..\LicenseChecker.pro
-
-REM Build
-mingw32-make -j4
-
-cd ..
+set PATH=%PATH%;C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin
+build-msbuild.bat
 ```
 
 ---
 
-## Error: "qmake: command not found"
+## Error: "The build tools for v142 (Platform Toolset = 'v142') cannot be found"
 
 ### Cause
-Qt5 bin directory not in PATH
+Both `.vcxproj` files target `PlatformToolset v142` (the VS2019 C++ toolset),
+which is an optional component separate from Visual Studio itself.
 
 ### Solution
+Open the **Visual Studio Installer** → Modify → **Individual components**
+tab → check **"MSVC v142 - VS 2019 C++ x64/x86 build tools"** → Modify.
 
-**Check qmake location:**
-```batch
-where qmake
-```
-
-If not found, add to PATH:
-```batch
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-set PATH=%Qt5_DIR%\bin;%PATH%
-qmake --version
-```
-
-**Permanent PATH (Windows):**
-1. Press `Win + Pause`
-2. Click "Advanced system settings"
-3. Click "Environment Variables"
-4. Add `C:\Qt\5.15.0\mingw81_64\bin` to PATH
-5. Restart terminal/IDE
+(If you'd rather not install v142, retargeting both `.vcxproj` files to
+`v143` also works - the code has no v142-specific dependency. But v142 is
+what's currently installed on both machines this project builds on, so
+that's the supported/tested path.)
 
 ---
 
-## Error: "mingw32-make: command not found"
+## Error: "Cannot find project file" / "LicenseChecker.sln not found"
 
 ### Cause
-MinGW not in PATH or not included with Qt5
+Not running from the repository root.
 
 ### Solution
-
-**Option 1: Use Qt5's MinGW**
 ```batch
-set Qt5_DIR=C:\Qt\5.15.0\mingw81_64
-set PATH=%Qt5_DIR%\bin;%PATH%
-mingw32-make --version
-```
-
-**Option 2: Reinstall Qt5 with MinGW**
-- Download Qt5.15 LTS
-- Select "MinGW 8.1 64-bit" component
-- Re-run installer
-
-**Option 3: Install MinGW Separately**
-- Download: https://sourceforge.net/projects/mingw-w64/
-- Add `C:\mingw64\bin` to PATH
-
----
-
-## Error: "undefined reference to `LicenseDetector::Detect()'"
-
-### Cause
-License detection library not linked properly
-
-### Solution
-
-**Check .pro files have correct LIBS:**
-```pro
-# In src/agent/Agent.pro and src/ui/UI.pro:
-LIBS += -L$$OUT_PWD/../license-detection -llicense_detection
-LIBS += -L$$OUT_PWD/../common -lcommon
-```
-
-**Clean rebuild:**
-```batch
-cd build
-mingw32-make distclean
-qmake -r -spec win32-g++ ..\LicenseChecker.pro
-mingw32-make -j4
+cd D:\path\to\license-checker
+build-msbuild.bat
 ```
 
 ---
 
-## Error: "C:\Qt\5.15.0\mingw81_64\bin\g++.exe: error: createprocess"
+## Error: "unresolved external symbol ..." linking `LicenseCheckerUI`
 
 ### Cause
-Path too long or special characters in Qt installation path
+`LicenseDetection` (the static library `LicenseCheckerUI` depends on)
+wasn't built, or you built `LicenseCheckerUI.vcxproj` in isolation instead
+of the whole solution.
 
 ### Solution
-
-**Move Qt to shorter path:**
+Build the solution, not a single project, so the dependency order in
+`LicenseChecker.sln` is respected:
 ```batch
-REM Move from: C:\Qt\5.15.0\mingw81_64
-REM To: C:\Qt5
-xcopy "C:\Qt\5.15.0" "C:\Qt5" /E /I
-set Qt5_DIR=C:\Qt5
-```
-
-**Or use shorter build path:**
-```batch
-cd \
-mkdir lc_build
-cd lc_build
-qmake -spec win32-g++ C:\License-checker\LicenseChecker.pro
-mingw32-make
+MSBuild LicenseChecker.sln /p:Configuration=Release /p:Platform=x64 /t:Rebuild
 ```
 
 ---
 
-## Error: "fatal error: cannot open source file 'LicenseDetector.h'"
+## Build is slow
 
-### Cause
-Include path not set correctly in .pro file
-
-### Solution
-
-**Verify includes in .pro:**
-```pro
-INCLUDEPATH += $$PWD \
-               $$PWD/../license-detection \
-               $$PWD/../common
-```
-
-**Check file exists:**
 ```batch
-dir src\license-detection\LicenseDetector.h
+MSBuild LicenseChecker.sln /p:Configuration=Release /p:Platform=x64 /m
 ```
-
----
-
-## Build is Slow
-
-### Solution
-
-**Use parallel jobs:**
-```batch
-mingw32-make -j8
-```
-
-Use number = your CPU cores (check `wmic logicalprocessor get`)
-
-**Skip debug info (Release build):**
-```bash
-qmake -r -spec win32-g++ CONFIG+=release ..\LicenseChecker.pro
-mingw32-make -j8
-```
+`/m` builds projects in parallel (there are only two here, so the gain is
+modest). Use Release rather than Debug for anything you intend to actually
+run - Debug is meaningfully slower to build and to run.
 
 ---
 
 ## Executable Won't Run
 
-### Error: "DLL not found"
+### "This app can't run on your PC" / wrong architecture
+Make sure you copied the file from `x64\Release\`, not `x64\Debug\` mixed
+with a different platform, and that the target machine is 64-bit (all
+supported Windows 7 SP1+ targets in practice are).
 
-**Solution:**
-Copy Qt5 runtime DLLs to executable directory:
-```batch
-copy "C:\Qt\5.15.0\mingw81_64\bin\Qt5Core.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\Qt5Gui.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\Qt5Widgets.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\Qt5Network.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\libgcc_s_seh-1.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\libstdc++-6.dll" build\src\ui\
-copy "C:\Qt\5.15.0\mingw81_64\bin\libwinpthread-1.dll" build\src\ui\
-```
+### It runs but does nothing / no window
+Check `license_checker_startup.log` next to the exe for a `FATAL:` line -
+`main.cpp` catches and logs unhandled exceptions there before the process
+exits. Also check Windows Event Viewer → Application logs.
 
-**Or add Qt bin to PATH:**
-```batch
-set PATH=C:\Qt\5.15.0\mingw81_64\bin;%PATH%
-build\src\ui\LicenseCheckerUI.exe
-```
+There are **no DLLs to copy** - `LicenseCheckerUI.exe` only links against
+standard Windows system libraries (`winhttp.lib`, `crypt32.lib`, etc.) that
+ship with Windows itself, so "DLL not found" errors point at something
+else (a genuinely corrupted copy, or an antivirus quarantine - check Event
+Viewer/Windows Defender history).
 
 ---
 
-## Service Won't Install/Start
-
-### Error: "Access Denied"
-
-**Solution:** Run as Administrator
-```batch
-REM Run cmd.exe as Administrator first, then:
-build\src\agent\LicenseCheckerAgent.exe /install
-net start LicenseCheckerAgent
-```
-
-### Error: "The service did not respond"
-
-**Solution:**
-1. Stop service: `net stop LicenseCheckerAgent`
-2. Check Windows Event Viewer for errors
-3. Reinstall:
-```batch
-build\src\agent\LicenseCheckerAgent.exe /uninstall
-build\src\agent\LicenseCheckerAgent.exe /install
-net start LicenseCheckerAgent
-```
-
----
-
-## UI Doesn't Show License Data
+## License Detection Shows "Unknown" / Missing Data
 
 ### Cause
-Service not running
+Not running elevated, or the relevant Windows subsystem isn't available.
 
 ### Solution
+- Run as Administrator (SL API and some WMI queries need it for full results)
+- Check `license-detection.log` next to the exe for `LogFailure` entries
+  from the specific detector (SL API / WMI / Registry / slmgr / ospp)
+- Verify WMI is running: `Get-Service -Name Winmgmt`
 
-**Check service status:**
-```batch
-sc query LicenseCheckerAgent
-```
+---
 
-**Start service:**
-```batch
-net start LicenseCheckerAgent
-```
+## Not Reporting to the Controller
 
-**Or run in standalone mode** (for testing):
-```batch
-REM Service not needed for UI testing, but data will be empty/cached
-build\src\ui\LicenseCheckerUI.exe
-```
+### Cause
+No server address is configured for this exe.
+
+### Solution
+Check `license-detection.log` for `ServerReporter:` lines - they say
+explicitly whether an embedded address was found, whether
+`agent_config.json` was found, and whether the POST succeeded. See
+[README.md](README.md)'s Troubleshooting section, `AGENT_SERVER_PROTOCOL_REAL.md`,
+and `license_checker_server/internal/checkerstamp` in the sibling repo for
+how the embedded address gets stamped in.
 
 ---
 
 ## Still Having Issues?
 
-### Debug Info
-
-**Show full build output:**
+**Full build output:**
 ```batch
-cd build
-mingw32-make clean
-qmake -r -spec win32-g++ ..\LicenseChecker.pro
-mingw32-make
+MSBuild LicenseChecker.sln /p:Configuration=Release /p:Platform=x64 /v:detailed
 ```
 
-Copy error messages and check:
-1. Qt5 installation is complete
-2. MinGW is included
-3. All paths are correct
-4. No special characters in paths
-
-### Get Help
-
-Provide:
-1. Error message (full output)
-2. Qt5 path: `echo %Qt5_DIR%`
-3. OS version: `ver`
-4. Build command used
+**When asking for help, include:**
+1. Full error message/output
+2. `msbuild -version` output
+3. Whether "MSVC v142 - VS 2019 C++ x64/x86 build tools" is installed
+   (Visual Studio Installer → Modify → Individual components)
+4. `license_checker_startup.log` and `license-detection.log`, if the issue
+   is at runtime rather than build time
