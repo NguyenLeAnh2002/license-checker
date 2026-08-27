@@ -300,7 +300,7 @@ LicenseStatus RegistryDetector::QueryWMISoftwareLicensingProduct(LicenseResult& 
         IEnumWbemClassObject* pEnumerator = NULL;
         hres = pSvc->ExecQuery(
             _bstr_t("WQL"),
-            _bstr_t("SELECT * FROM SoftwareLicensingProduct WHERE PartialProductKey IS NOT NULL"),
+            _bstr_t("SELECT * FROM SoftwareLicensingProduct WHERE ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL"),
             WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
             NULL,
             &pEnumerator
