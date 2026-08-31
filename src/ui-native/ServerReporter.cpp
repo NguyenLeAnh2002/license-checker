@@ -1,6 +1,7 @@
 #include "ServerReporter.h"
 #include "../license-detection/DetectionLogger.h"
 #include "../license-detection/LicenseStatusEnum.h"
+#include "../license-detection/LicenseResultMapping.h"
 #include <windows.h>
 #include <winhttp.h>
 #include <fstream>
@@ -27,46 +28,6 @@ std::wstring Utf8ToWide(const std::string& utf8) {
     std::wstring result(size, 0);
     MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.size(), &result[0], size);
     return result;
-}
-
-// Vocabulary for the BE team's real server - all four values confirmed:
-//   Legitimate         -> "VALID"
-//   Cracked            -> "CRACKED"
-//   NotLicensed        -> "NOT_ACTIVATED"
-//   UnableToDetermine  -> "UNKNOWN"
-std::string LicenseStatusToRealString(LicenseStatus status) {
-    switch (status) {
-        case LicenseStatus::Legitimate:       return "VALID";
-        case LicenseStatus::Cracked:          return "CRACKED";
-        case LicenseStatus::NotLicensed:      return "NOT_ACTIVATED";
-        case LicenseStatus::UnableToDetermine:
-        default:                             return "UNKNOWN";
-    }
-}
-
-// Office has no clean LicenseStatus-style enum in this codebase - it's the
-// raw "LICENSE STATUS: ---XXX---" token from `cscript ospp.vbs /dstatus`
-// (see OfficeOSPPDetector.cpp). Map the standard OSPP tokens onto the same
-// confirmed vocabulary as LicenseStatusToRealString() (NOT_ACTIVATED/
-// CRACKED/VALID/UNKNOWN). The OSPP-token-to-category mapping itself
-// (which raw tokens mean "cracked" vs "grace period" etc.) is still a
-// best-effort heuristic - not confirmed against the real backend.
-std::string OfficeStatusToRealString(const std::string& rawOsppStatus) {
-    if (rawOsppStatus.empty()) {
-        return "UNKNOWN";
-    }
-    if (rawOsppStatus.find("NON_GENUINE") != std::string::npos) {
-        return "CRACKED";
-    }
-    if (rawOsppStatus.find("LICENSED") != std::string::npos) {
-        return "VALID";
-    }
-    if (rawOsppStatus.find("GRACE") != std::string::npos ||
-        rawOsppStatus.find("NOTIFICATIONS") != std::string::npos ||
-        rawOsppStatus.find("HOLD") != std::string::npos) {
-        return "NOT_ACTIVATED";
-    }
-    return "UNKNOWN";
 }
 
 // Reserved trailer that license_checker_server (see internal/checkerstamp
@@ -164,69 +125,6 @@ std::string DescribeWinHttpError(DWORD code) {
     }
 }
 
-std::string GetLocalHostname() {
-    char buffer[MAX_COMPUTERNAME_LENGTH + 1];
-    DWORD size = sizeof(buffer);
-    if (GetComputerNameA(buffer, &size)) {
-        return std::string(buffer, size);
-    }
-    return "";
-}
-
-// Maps LicenseResult::GetWindowsVersion()'s numeric code (7/8/81/10/11) plus
-// the detected edition into the human-readable "os_version" string the
-// server expects (e.g. "Windows 10 Pro").
-std::string FormatOsVersion(int version, const std::string& edition) {
-    std::string base;
-    switch (version) {
-        case 7:  base = "Windows 7"; break;
-        case 8:  base = "Windows 8"; break;
-        case 81: base = "Windows 8.1"; break;
-        case 10: base = "Windows 10"; break;
-        case 11: base = "Windows 11"; break;
-        default: base = "Windows"; break;
-    }
-    if (!edition.empty()) {
-        base += " " + edition;
-    }
-    return base;
-}
-
-std::string CurrentTimestampUtc() {
-    std::time_t now = std::time(nullptr);
-    std::tm utcTm{};
-    gmtime_s(&utcTm, &now);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utcTm);
-    return std::string(buf);
-}
-
-// Extracts a leading integer from strings like "174 minute(s)" (as reported
-// by `cscript ospp.vbs`). Returns false (leaving outValue untouched) if no
-// digits are found, so callers can distinguish "0" from "not present".
-bool ParseLeadingInt(const std::string& s, int& outValue) {
-    size_t i = 0;
-    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) {
-        i++;
-    }
-    bool negative = false;
-    if (i < s.size() && (s[i] == '-' || s[i] == '+')) {
-        negative = (s[i] == '-');
-        i++;
-    }
-    size_t digitsStart = i;
-    long value = 0;
-    while (i < s.size() && std::isdigit(static_cast<unsigned char>(s[i]))) {
-        value = value * 10 + (s[i] - '0');
-        i++;
-    }
-    if (i == digitsStart) {
-        return false;
-    }
-    outValue = negative ? -static_cast<int>(value) : static_cast<int>(value);
-    return true;
-}
-
 } // namespace
 
 ServerReporter::ServerReporter(DetectionLogger& logger)
@@ -237,20 +135,6 @@ ServerReporter::ServerReporter(DetectionLogger& logger)
     } else {
         logger_.LogInfo("ServerReporter: reporting disabled (no server address embedded in this binary and no agent_config.json next to the executable)");
     }
-}
-
-std::string ServerReporter::GetExecutableDirectory() {
-    char pathBuf[MAX_PATH];
-    DWORD len = GetModuleFileNameA(NULL, pathBuf, MAX_PATH);
-    if (len == 0 || len == MAX_PATH) {
-        return "";
-    }
-    std::string path(pathBuf, len);
-    size_t pos = path.find_last_of("\\/");
-    if (pos == std::string::npos) {
-        return "";
-    }
-    return path.substr(0, pos);
 }
 
 bool ServerReporter::TryGetJsonString(const std::string& json, const std::string& key, std::string& outValue) {
@@ -342,29 +226,6 @@ ServerReporter::Config ServerReporter::LoadConfig() const {
     }
 
     return config;
-}
-
-std::string ServerReporter::JsonEscape(const std::string& value) {
-    std::string out;
-    out.reserve(value.size());
-    for (unsigned char c : value) {
-        switch (c) {
-            case '"':  out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (c < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += static_cast<char>(c);
-                }
-        }
-    }
-    return out;
 }
 
 // Payload shape matches the controller's POST /api/report handler

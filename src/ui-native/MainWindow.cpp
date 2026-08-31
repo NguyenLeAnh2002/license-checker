@@ -15,6 +15,9 @@
 #include <objidl.h>
 #include <gdiplus.h>
 #include <dwmapi.h>
+#include "../license-detection/LocalDatabase.h"
+#include "ResultsWindow.h"
+#include "Utf8Utils.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "user32.lib")
@@ -152,22 +155,28 @@ const int ID_STATUS_LABEL = 1002;
 const int ID_CHECK_BUTTON = 1003;
 const int ID_REFRESH_LABEL = 1004;
 const int ID_LANGUAGE_COMBO = 1005;
+const int ID_SAVE_RESULT_BUTTON = 1006;
+const int ID_VIEW_RESULTS_BUTTON = 1007;
 
 const int TAB_WINDOWS = 0;
 const int TAB_OFFICE = 1;
 const int TAB_SETTINGS = 2;
 
-// Bottom-row layout (refresh status label + Check Now button). Shared by
+// Bottom-row layout (refresh status label + action buttons). Shared by
 // CreateControls() (initial placement) and MainWindow::OnSize() (kept in
-// sync with the window's actual client size) so the two controls are
-// always computed from the same margins and never overlap.
+// sync with the window's actual client size) so the controls are always
+// computed from the same margins and never overlap.
 const int kCheckButtonWidth = 160;
 const int kCheckButtonHeight = 34;
+const int kSaveResultButtonWidth = 140;
+const int kViewResultsButtonWidth = 190;
+const int kButtonSpacing = 10;
 const int kBottomMargin = 20;
 const int kRefreshLabelHeight = 20;
 
 MainWindow::MainWindow()
     : m_hwnd(NULL), m_hTabControl(NULL), m_hCheckButton(NULL),
+      m_hSaveResultButton(NULL), m_hViewResultsButton(NULL),
       m_hRefreshLabel(NULL), m_hLanguageLabel(NULL), m_hLanguageCombo(NULL),
       m_hWindowsStatusLabel(NULL), m_hWindowsNameLabel(NULL), m_hWindowsEditionLabel(NULL),
       m_hWindowsDescriptionLabel(NULL), m_hWindowsLicenseDetailLabel(NULL),
@@ -659,6 +668,20 @@ void MainWindow::CreateControls() {
         m_hwnd, (HMENU)ID_CHECK_BUTTON, g_hInstance, NULL
     );
 
+    m_hSaveResultButton = CreateWindowW(
+        L"BUTTON", L"Lưu kết quả",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        0, 292, kSaveResultButtonWidth, kCheckButtonHeight,
+        m_hwnd, (HMENU)ID_SAVE_RESULT_BUTTON, g_hInstance, NULL
+    );
+
+    m_hViewResultsButton = CreateWindowW(
+        L"BUTTON", L"Xem kết quả kiểm tra",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        0, 292, kViewResultsButtonWidth, kCheckButtonHeight,
+        m_hwnd, (HMENU)ID_VIEW_RESULTS_BUTTON, g_hInstance, NULL
+    );
+
     // Set font - Segoe UI has shipped on every Windows since Vista; falls
     // back to the stock GUI font if somehow unavailable.
     HFONT hFont = CreateFontW(
@@ -690,6 +713,8 @@ void MainWindow::CreateControls() {
     SendMessage(m_hServiceStatusLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hRefreshLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hCheckButton, WM_SETFONT, (WPARAM)hFont, FALSE);
+    SendMessage(m_hSaveResultButton, WM_SETFONT, (WPARAM)hFont, FALSE);
+    SendMessage(m_hViewResultsButton, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hLanguageLabel, WM_SETFONT, (WPARAM)hFont, FALSE);
     SendMessage(m_hLanguageCombo, WM_SETFONT, (WPARAM)hFont, FALSE);
 
@@ -712,12 +737,22 @@ void MainWindow::CreateControls() {
 // label's width is computed from whatever space is actually left after the
 // fixed-size button, instead of both using independent hardcoded widths.
 void MainWindow::LayoutBottomControls(int cx, int cy) {
+    int buttonY = cy - kCheckButtonHeight - kBottomMargin;
+    int checkX = cx - kCheckButtonWidth - kBottomMargin;
+    int viewResultsX = checkX - kButtonSpacing - kViewResultsButtonWidth;
+    int saveResultX = viewResultsX - kButtonSpacing - kSaveResultButtonWidth;
+
     if (m_hCheckButton) {
-        MoveWindow(m_hCheckButton, cx - kCheckButtonWidth - kBottomMargin, cy - kCheckButtonHeight - kBottomMargin,
-            kCheckButtonWidth, kCheckButtonHeight, TRUE);
+        MoveWindow(m_hCheckButton, checkX, buttonY, kCheckButtonWidth, kCheckButtonHeight, TRUE);
+    }
+    if (m_hViewResultsButton) {
+        MoveWindow(m_hViewResultsButton, viewResultsX, buttonY, kViewResultsButtonWidth, kCheckButtonHeight, TRUE);
+    }
+    if (m_hSaveResultButton) {
+        MoveWindow(m_hSaveResultButton, saveResultX, buttonY, kSaveResultButtonWidth, kCheckButtonHeight, TRUE);
     }
     if (m_hRefreshLabel) {
-        int labelWidth = cx - kCheckButtonWidth - kBottomMargin * 3;
+        int labelWidth = saveResultX - kBottomMargin * 2;
         if (labelWidth < 100) {
             labelWidth = 100;
         }
@@ -736,6 +771,10 @@ void MainWindow::OnCommand(WPARAM wParam, LPARAM lParam) {
 
     if (wmId == ID_CHECK_BUTTON) {
         CheckNow();
+    } else if (wmId == ID_SAVE_RESULT_BUTTON) {
+        SaveCheckResult();
+    } else if (wmId == ID_VIEW_RESULTS_BUTTON) {
+        OpenResultsWindow();
     } else if (wmId == ID_LANGUAGE_COMBO && wmEvent == CBN_SELCHANGE) {
         OnLanguageChanged();
     }
@@ -1100,4 +1139,33 @@ void MainWindow::CheckNow() {
     if (m_detectionWorker) {
         m_detectionWorker->RequestImmediateCheck();
     }
+}
+
+// Appends the last check result to <exe-dir>\license_checker_results.db,
+// creating it (with schema identical to license_checker_server's) if it
+// doesn't exist yet - see LocalDatabase for why the file is structured this
+// way (importable via that server's own DB-merge feature unmodified).
+// Skips writing a new row (and says so) if the result is identical to the
+// last one saved - LocalDatabase::SaveResult's "check trùng" behavior.
+void MainWindow::SaveCheckResult() {
+    SaveResultOutcome outcome = LocalDatabase::SaveResult(m_lastResult);
+    if (!outcome.error.empty()) {
+        std::wstring msg = L"Không lưu được kết quả:\n" + Utf8Utils::Utf8ToWide(outcome.error);
+        MessageBoxW(m_hwnd, msg.c_str(), L"Lưu kết quả", MB_OK | MB_ICONERROR);
+    } else if (outcome.inserted) {
+        std::wstring path = Utf8Utils::Utf8ToWide(LocalDatabase::DefaultDbPath());
+        std::wstring msg = L"Đã lưu kết quả mới vào:\n" + path;
+        MessageBoxW(m_hwnd, msg.c_str(), L"Lưu kết quả", MB_OK | MB_ICONINFORMATION);
+    } else {
+        MessageBoxW(m_hwnd,
+            L"Kết quả không đổi so với lần lưu gần nhất, không lưu thêm bản ghi trùng lặp.",
+            L"Lưu kết quả", MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+// Opens (or brings to front) the "Xem kết quả kiểm tra" window, listing
+// every result saved so far and letting the user export a checked subset
+// to Excel.
+void MainWindow::OpenResultsWindow() {
+    ResultsWindow::ShowOrActivate(m_hwnd);
 }
