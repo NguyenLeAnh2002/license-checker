@@ -32,12 +32,16 @@ private:
     void UpdateUITexts();
     void OnLicenseResultReady(const LicenseResult& result);
     void CheckNow();
+    void SaveCheckResult();
+    void OpenResultsWindow();
     void ApplyDwmVisuals();
     void DrawStatusLabel(DRAWITEMSTRUCT* dis);
 
     HWND m_hwnd;
     HWND m_hTabControl;
     HWND m_hCheckButton;
+    HWND m_hSaveResultButton;
+    HWND m_hViewResultsButton;
     HWND m_hRefreshLabel;
     HWND m_hLanguageLabel;
     HWND m_hLanguageCombo;

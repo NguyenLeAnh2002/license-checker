@@ -33,9 +33,7 @@ private:
     std::string BuildPayload(const LicenseResult& result) const;
     bool HttpPost(const std::string& jsonBody, std::string& outError) const;
 
-    static std::string GetExecutableDirectory();
     static bool TryGetJsonString(const std::string& json, const std::string& key, std::string& outValue);
-    static std::string JsonEscape(const std::string& value);
 
     DetectionLogger& logger_;
     Config config_;

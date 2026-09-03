@@ -69,6 +69,12 @@
     <ClInclude Include="WindowsSLMgrDetector.h" />
     <ClInclude Include="OfficeOSPPDetector.h" />
     <ClInclude Include="LicenseInfo.h" />
+    <ClInclude Include="LicenseResultMapping.h" />
+    <ClInclude Include="FlatJson.h" />
+    <ClInclude Include="LocalDatabase.h" />
+    <ClInclude Include="ExcelReport.h" />
+    <ClInclude Include="..\third_party\sqlite\sqlite3.h" />
+    <ClInclude Include="..\third_party\miniz\miniz.h" />
   </ItemGroup>
 
   <ItemGroup>
@@ -80,6 +86,17 @@
     <ClCompile Include="DetectionLogger.cpp" />
     <ClCompile Include="WindowsSLMgrDetector.cpp" />
     <ClCompile Include="OfficeOSPPDetector.cpp" />
+    <ClCompile Include="LicenseResultMapping.cpp" />
+    <ClCompile Include="FlatJson.cpp" />
+    <ClCompile Include="LocalDatabase.cpp" />
+    <ClCompile Include="ExcelReport.cpp" />
+    <ClCompile Include="..\third_party\sqlite\sqlite3.c">
+      <WarningLevel>Level1</WarningLevel>
+      <PreprocessorDefinitions>SQLITE_OMIT_LOAD_EXTENSION;SQLITE_THREADSAFE=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\third_party\miniz\miniz.c">
+      <WarningLevel>Level1</WarningLevel>
+    </ClCompile>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

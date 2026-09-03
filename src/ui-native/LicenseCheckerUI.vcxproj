@@ -41,7 +41,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <AdditionalDependencies>advapi32.lib;kernel32.lib;user32.lib;gdi32.lib;comctl32.lib;gdiplus.lib;dwmapi.lib;ws2_32.lib;wbemuuid.lib;ole32.lib;oleaut32.lib;crypt32.lib;wtsapi32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>advapi32.lib;kernel32.lib;user32.lib;gdi32.lib;comctl32.lib;comdlg32.lib;gdiplus.lib;dwmapi.lib;ws2_32.lib;wbemuuid.lib;ole32.lib;oleaut32.lib;crypt32.lib;wtsapi32.lib;winhttp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -75,6 +75,8 @@
 
   <ItemGroup>
     <ClInclude Include="MainWindow.h" />
+    <ClInclude Include="ResultsWindow.h" />
+    <ClInclude Include="Utf8Utils.h" />
     <ClInclude Include="Localization.h" />
     <ClInclude Include="DetectionWorker.h" />
     <ClInclude Include="ServerReporter.h" />
@@ -85,6 +87,8 @@
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="MainWindow.cpp" />
+    <ClCompile Include="ResultsWindow.cpp" />
+    <ClCompile Include="Utf8Utils.cpp" />
     <ClCompile Include="Localization.cpp" />
     <ClCompile Include="DetectionWorker.cpp" />
     <ClCompile Include="ServerReporter.cpp" />
